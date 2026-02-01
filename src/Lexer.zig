@@ -72,6 +72,7 @@ pub const TokenType = enum {
     kw_else,
     kw_for,
     kw_defer,
+    kw_goto,
     kw_let,
     kw_var,
     kw_type,
