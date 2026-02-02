@@ -296,7 +296,7 @@ pub fn peek(l: *Lexer) Token {
         ';' => l.token(.semicolon, 1),
         '?' => l.token(.qmark, 1),
         ',' => l.token(.comma, 1),
-        '`' => l.token(.comma, 1),
+        '`' => l.token(.btick, 1),
         '!' => if (l.ahead('=')) l.token(.not_equal, 2) else l.token(.bang, 1),
         '*' => if (l.ahead('=')) l.token(.star_equal, 2) else l.token(.star, 1),
         ':' => if (l.ahead(':')) l.token(.scope, 2) else l.token(.colon, 1),
@@ -980,6 +980,25 @@ test "string literal lexing" {
     try t.expectStringLit(
         \\" jsdfj    23 9823\U0007FFA089428773 ^#&^&$^#*%"
     );
+}
+
+test "unicode identifier lexing" {
+    var t: LexerTest = undefined;
+    t.setUp();
+    defer t.tearDown();
+
+    try t.expectTokenTypes("π", &.{.ident});
+    try t.expectTokenTypes("var_λ", &.{.ident});
+    try t.expectTokenTypes("Δt", &.{.ident});
+    try t.expectTokenTypes("x'", &.{.ident});
+    try t.expectTokenTypes("α'", &.{.ident});
+
+    try t.expectTokenTypes("let sum_Σ = 10", &.{
+        .kw_let,
+        .ident,
+        .equal,
+        .int_lit,
+    });
 }
 
 // test "fuzz test" {
