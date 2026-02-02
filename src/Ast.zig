@@ -44,13 +44,20 @@ pub fn set(ast: *Ast, comptime attr: SideTables.Attachment, of: node.Handle, val
     }
 }
 
+pub fn at(ast: *Ast, ref: anytype) node.Access(node.Deref(@TypeOf(ref))) {
+    return .{
+        .ptr = &@field(ast.storage.items[ref.handle].node, @tagName(TypeTag(node.Deref(@TypeOf(ref))))),
+        .handle = ref.handle,
+    };
+}
+
 // NOTE: the expectation is that these functions are called in pre-order while
 // parsing. This allows for walking the tree in both post and pre order without
 // needing some auxillery structure - only need to keep track of how many children
 // each node has.
-pub fn startNode(ast: *Ast, value: anytype) !node.Ref(@TypeOf(value)) {
+pub fn startNode(ast: *Ast, comptime N: type) !node.Ref(N) {
     const handle: node.Handle = @intCast(ast.storage.items.len);
-    try ast.storage.append(ast.ctx.allocator, .{ .node = @unionInit(Node, @tagName(TypeTag(@TypeOf(value))), value), .skip = 0 });
+    try ast.storage.append(ast.ctx.allocator, .{ .node = @unionInit(Node, @tagName(TypeTag(N)), mem.zeroes(N)), .skip = 0 });
     return .{ .handle = handle };
 }
 
@@ -67,16 +74,16 @@ pub fn endNode(ast: *Ast, handle: node.Handle) void {
 // }
 
 pub const PreOrderWalker = struct {
-    enter: fn (*PreOrderWalker, Node) void,
+    enter: fn (*PreOrderWalker, node.Access(Node)) void,
 };
 
 pub const PostOrderWalker = struct {
-    exit: fn (*PostOrderWalker, Node) void,
+    exit: fn (*PostOrderWalker, node.Access(Node)) void,
 };
 
 pub fn walkPreOrder(ast: Ast, walker: *PreOrderWalker) void {
-    for (ast.storage.items) |n| {
-        walker.enter(walker, n.node);
+    for (ast.storage.items, 0..) |*n, i| {
+        walker.enter(walker, .{ .ptr = &n.node, .handle = i });
     }
 }
 
@@ -100,7 +107,7 @@ pub fn walkPostOrder(ast: Ast, walker: *PostOrderWalker) !void {
                 // the pending node
                 break;
             }
-            walker.exit(walker, nodes[pending.pop().?].node);
+            walker.exit(walker, .{ .ptr = &nodes[pending.pop().?].node, .handle = top });
         }
     }
 }
@@ -114,7 +121,7 @@ pub fn walk(ast: Ast, pre: *PreOrderWalker, post: *PostOrderWalker) !void {
     var i: usize = 0;
     while (i < nodes.len or pending.items.len > 0) {
         if (i < nodes.len) {
-            pre.enter(pre, nodes[i].node);
+            pre.enter(pre, .{ .ptr = &nodes[i].node, .handle = i });
             try pending.append(ast.ctx.allocator, i);
             i += 1;
         }
@@ -126,7 +133,7 @@ pub fn walk(ast: Ast, pre: *PreOrderWalker, post: *PostOrderWalker) !void {
                 // the pending node
                 break;
             }
-            post.exit(post, nodes[pending.pop().?].node);
+            post.exit(post, .{ .ptr = &nodes[pending.pop().?].node, .handle = top });
         }
     }
 }

@@ -9,6 +9,21 @@ pub fn Ref(comptime N: type) type {
     };
 }
 
+pub fn Deref(comptime R: type) type {
+    if (!@hasDecl(R, "Child") or Ref(R.Child) != R) {
+        @compileLog(R);
+        @compileError("cannot deref type not instanciated with node.Ref");
+    }
+    return R.Child;
+}
+
+pub fn Access(comptime N: type) type {
+    return struct {
+        ptr: *N,
+        handle: Handle,
+    };
+}
+
 pub const SourceFile = struct {};
 pub const Decls = struct {};
 pub const Decl = struct {};
