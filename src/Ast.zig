@@ -82,8 +82,8 @@ pub const PostOrderWalker = struct {
 };
 
 pub fn walkPreOrder(ast: Ast, walker: *PreOrderWalker) void {
-    for (ast.storage.items, 0..) |*n, i| {
-        walker.enter(walker, .{ .ptr = &n.node, .handle = i });
+    for (0..ast.storage.items.len) |i| {
+        walker.enter(walker, ast.at(i));
     }
 }
 
@@ -107,7 +107,7 @@ pub fn walkPostOrder(ast: Ast, walker: *PostOrderWalker) !void {
                 // the pending node
                 break;
             }
-            walker.exit(walker, .{ .ptr = &nodes[pending.pop().?].node, .handle = top });
+            walker.exit(walker, ast.at(pending.pop().?));
         }
     }
 }
@@ -121,7 +121,7 @@ pub fn walk(ast: Ast, pre: *PreOrderWalker, post: *PostOrderWalker) !void {
     var i: usize = 0;
     while (i < nodes.len or pending.items.len > 0) {
         if (i < nodes.len) {
-            pre.enter(pre, .{ .ptr = &nodes[i].node, .handle = i });
+            pre.enter(pre, ast.at(i));
             try pending.append(ast.ctx.allocator, i);
             i += 1;
         }
@@ -133,7 +133,7 @@ pub fn walk(ast: Ast, pre: *PreOrderWalker, post: *PostOrderWalker) !void {
                 // the pending node
                 break;
             }
-            post.exit(post, .{ .ptr = &nodes[pending.pop().?].node, .handle = top });
+            post.exit(post, ast.at(pending.pop().?));
         }
     }
 }
