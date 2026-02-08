@@ -95,6 +95,7 @@ pub const TokenType = enum {
     kw_true,
     kw_false,
     kw_extern,
+    kw_local,
 };
 
 const Keyword = en: {

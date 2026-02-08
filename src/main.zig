@@ -71,7 +71,7 @@ pub fn main() !void {
     defer ast.deinit();
 
     // _ = try ast.add(node.VarDecl{ .binding = .{ .handle = 0 } }, 0, .{ .position = 30 });
-    const var_decl = try ast.startNode(node.VarDecl);
-    ast.at(var_decl).ptr.binding = .{ .handle = 0 };
-    defer ast.endNode(var_decl.handle);
+    // const var_decl = try ast.startNode(node.VarDecl);
+    // ast.at(var_decl).ptr.binding = .{ .handle = 0 };
+    // defer ast.endNode(var_decl.handle);
 }
