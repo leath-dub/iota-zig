@@ -103,7 +103,7 @@ pub const CollType = struct {
 };
 
 pub const TupleType = struct {
-    pub const child = .{.type_or_inline_decl};
+    pub const child = .{.type, .type_decl};
 };
 
 pub const StructType = struct {
@@ -117,14 +117,7 @@ pub const StructField = struct {
 };
 
 pub const SumType = struct {
-    pub const child = .{.type_or_inline_decl};
-};
-
-pub const TypeOrInlineDecl = struct {
-    pub const child = .{
-        .type,
-        .type_decl,
-    };
+    pub const child = .{.type, .type_decl};
 };
 
 pub const EnumType = struct {
@@ -168,8 +161,8 @@ pub const Stmt = struct {
 
 pub const IfStmt = struct {
     cond: Ref(Cond),
-    true_branch: Ref(CompStmt),
-    false_branch: ?Ref(Else),
+    then_arm: Ref(CompStmt),
+    else_arm: ?Ref(Else),
 };
 
 pub const Else = struct {
@@ -247,17 +240,18 @@ pub const Expr = struct {
 
 pub const AtomExpr = struct {
     pub const child = .{
+        .paren_expr,
+        .anon_call_expr,
         .token_expr,
-        .builtin_type_expr,
+        .builtin_type,
         .scoped_ident,
+        .unit_expr,
     };
 };
 
-pub const TokenExpr = struct {
-    token: Token,
-};
+pub const UnitExpr = struct {};
 
-pub const BuiltinTypeExpr = struct {
+pub const TokenExpr = struct {
     token: Token,
 };
 
@@ -273,26 +267,30 @@ pub const UnaryExpr = struct {
 
 pub const BinExpr = struct {
     op: Token,
-    left_operand: Ref(Expr),
-    right_operand: Ref(Expr),
+    left: Ref(Expr),
+    right: Ref(Expr),
 };
 
 pub const CallExpr = struct {
-    callable: ?Ref(Expr),
-    args: CallExprArgs,
+    callable: Ref(Expr),
+    args: Ref(CallExprArgs),
 };
 
 pub const AnonCallExpr = struct {
-    args: CallExprArgs,
+    pub const child = .{.call_expr_args};
+};
+
+pub const ParenExpr = struct {
+    pub const child = .{.expr};
 };
 
 pub const CallExprArgs = struct {
-    pub const child = .{.call_arg};
+    pub const child = .{.labelled_expr, .expr};
 };
 
-pub const CallExprArg = struct {
-    name: ?Ref(Ident),
-    value: Ref(Expr),
+pub const LabelledExpr = struct {
+    label: Ref(Ident),
+    expr: Ref(Expr),
 };
 
 pub const CollAccessExpr = struct {

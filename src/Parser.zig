@@ -83,7 +83,7 @@ fn parse_decl(p: *Parser) node.Ref(node.Decl) {
     again: switch (p.at().type) {
         .kw_let, .kw_var, .kw_def => _ = p.parse_var_decl(),
         // .kw_fun => p.parse_fun_decl(),
-        .kw_type => _ = p.parse_type_decl(),
+        .kw_type => _ = p.parse_type_decl(.semicolon),
         else => if (p.expectOneOf(.{ .kw_let, .kw_var, .kw_def, .kw_fun, .kw_type })) {
             continue :again p.at().type;
         },
@@ -108,9 +108,8 @@ fn parse_var_decl(p: *Parser) node.Ref(node.VarDecl) {
     }
 
     if (p.on(.equal)) {
-        // TODO
-        // task.set(p, .init_expr, p.parse_expr());
-        unreachable;
+        _ = p.next();
+        task.set(p, .init_expr, p.parse_expr());
     }
 
     _ = p.skipIf(.semicolon);
@@ -118,14 +117,20 @@ fn parse_var_decl(p: *Parser) node.Ref(node.VarDecl) {
     return task.output;
 }
 
-fn parse_type_decl(p: *Parser) node.Ref(node.TypeDecl) {
+fn parse_type_decl(p: *Parser, delim: ?TokenType) node.Ref(node.TypeDecl) {
     const task = p.startTask(node.TypeDecl);
     defer p.endTask(task);
     if (!p.skipIf(.kw_type)) return task.output;
     task.set(p, .name, p.parse_ident());
     if (!p.skipIf(.equal)) return task.output;
     task.set(p, .type, p.parse_type());
-    if (!p.skipIf(.semicolon)) return task.output;
+    if (delim) |d_| {
+        switch (d_) {
+            inline else => |d| if (!p.skipIf(d)) {
+                return task.output;
+            },
+        }
+    }
     return task.output;
 }
 
@@ -334,14 +339,11 @@ fn empty_ident(p: *Parser) node.Ref(node.Ident) {
     return task.output;
 }
 
-fn parse_type_or_inline_decl(p: *Parser) node.Ref(node.TypeOrInlineDecl) {
-    const task = p.startTask(node.TypeOrInlineDecl);
-    defer p.endTask(task);
+fn parse_type_or_inline_decl(p: *Parser) void {
     switch (p.at().type) {
-        .kw_type => _ = p.parse_type_decl(),
+        .kw_type => _ = p.parse_type_decl(null),
         else => _ = p.parse_type(),
     }
-    return task.output;
 }
 
 fn parse_tuple_or_sum_type(p: *Parser) node.Ref(Ast.Node) {
@@ -354,7 +356,7 @@ fn parse_tuple_or_sum_type(p: *Parser) node.Ref(Ast.Node) {
 
     // Both tuples and sum types share the same first child.
     // Parse it so we are looking at either ')', '|' or ','.
-    _ = p.parse_type_or_inline_decl();
+    p.parse_type_or_inline_decl();
 
     again: switch (p.at().type) {
         // You can't have a union of single type so this is interpreted
@@ -377,10 +379,10 @@ fn subparse_sum_type(p: *Parser, task: ParseTask(Ast.Node)) node.Ref(node.SumTyp
         if (p.on(.rparen)) {
             break;
         }
-        _ = p.parse_type_or_inline_decl();
+        p.parse_type_or_inline_decl();
     }
     p.ast.atIndex(task.output.handle).ptr.* = .{ .sum_type = .{} };
-    return node.Ref(node.SumType) { .handle = task.output.handle };
+    return node.Ref(node.SumType){ .handle = task.output.handle };
 }
 
 fn subparse_tuple_type(p: *Parser, task: ParseTask(Ast.Node)) node.Ref(node.TupleType) {
@@ -389,17 +391,135 @@ fn subparse_tuple_type(p: *Parser, task: ParseTask(Ast.Node)) node.Ref(node.Tupl
         if (p.on(.rparen)) {
             break;
         }
-        _ = p.parse_type_or_inline_decl();
+        p.parse_type_or_inline_decl();
     }
     p.ast.atIndex(task.output.handle).ptr.* = .{ .tuple_type = .{} };
-    return node.Ref(node.TupleType) { .handle = task.output.handle };
+    return node.Ref(node.TupleType){ .handle = task.output.handle };
 }
 
-// TODO: have expression parsing in a separate file as it is so distinct to the
-// normal recursive decent parser. In fact it may be a good idea to build the
-// expression tree in a temporary arena and copy into the normal AST, due to
-// the fact that the AST can have re-parenting happen unless I figure out how
-// to properly have suspended nodes (the issue with this is it needs to work recursively).
+fn parse_expr(p: *Parser) node.Ref(node.Expr) {
+    const left = p.startTask(node.Expr);
+    defer p.endTask(left);
+    _ = p.parse_atom_expr();
+    return left.output;
+}
+
+fn parse_atom_expr(p: *Parser) node.Ref(node.AtomExpr) {
+    const task = p.startTask(node.AtomExpr);
+    defer p.endTask(task);
+
+    again: switch (p.at().type) {
+        .lparen => _ = p.parse_paren_or_anon_call_expr(),
+        .char_lit,
+        .string_lit,
+        .int_lit,
+        .float_lit,
+        .kw_true,
+        .kw_false => {
+            const expr = p.startTask(node.TokenExpr);
+            defer p.endTask(expr);
+            expr.set(p, .token, p.munch());
+        },
+        .kw_u8,
+        .kw_s8,
+        .kw_u16,
+        .kw_s16,
+        .kw_u32,
+        .kw_s32,
+        .kw_u64,
+        .kw_s64,
+        .kw_f32,
+        .kw_f64,
+        .kw_bool,
+        .kw_unit,
+        .kw_string => {
+            const ty = p.startTask(node.BuiltinType);
+            defer p.endTask(ty);
+            ty.set(p, .token, p.munch());
+        },
+        .scope,
+        .ident => _ = p.parse_scoped_ident(),
+        else => if (p.expectOneOf(.{ .lparen, .char_lit, .string_lit, .int_lit, .float_lit, .kw_true, .kw_false, .kw_u8, .kw_s8, .kw_u16, .kw_s16, .kw_u32, .kw_s32, .kw_u64, .kw_s64, .kw_f32, .kw_f64, .kw_bool, .kw_unit, .kw_string, .scope, .ident, })) {
+            continue :again p.at().type;
+        },
+    }
+
+    return task.output;
+}
+
+fn parse_paren_or_anon_call_expr(p: *Parser) void {
+    // Create a task to no concreate AST node. Subparse steps can reify this
+    // to the appropriate type once it is unambiguous.
+    const task = p.startTask(Ast.Node);
+    defer p.endTask(task);
+
+    if (!p.skipIf(.lparen)) return;
+    if (p.on(.rparen)) {
+        // If just (), it means unit value literal
+        _ = p.next();
+        p.ast.atIndex(task.output.handle).ptr.* = .{ .unit_expr = .{} };
+        return;
+    }
+
+    const maybe_labelled = p.parse_maybe_labelled_expr();
+    if (p.ast.entryConst(maybe_labelled).node == .labelled_expr) {
+        _ = p.subparse_anon_call_expr(task);
+        _ = p.skipIf(.rparen);
+        return;
+    }
+
+    again: switch (p.at().type) {
+        .comma => _ = p.subparse_anon_call_expr(task),
+        .rparen => _ = p.subparse_paren_expr(task),
+        else => if (p.expectOneOf(.{ .comma, .rparen })) {
+            continue :again p.at().type;
+        },
+    }
+
+    _ = p.skipIf(.rparen);
+}
+
+fn subparse_paren_expr(p: *Parser, task: ParseTask(Ast.Node)) node.Ref(node.ParenExpr) {
+    p.ast.atIndex(task.output.handle).ptr.* = .{ .paren_expr = .{} };
+    return node.Ref(node.ParenExpr){ .handle = task.output.handle };
+}
+
+fn subparse_anon_call_expr(p: *Parser, task: ParseTask(Ast.Node)) node.Ref(node.AnonCallExpr) {
+    while (p.on(.comma)) {
+        _ = p.next();
+        if (p.on(.rparen)) {
+            break;
+        }
+        _ = p.parse_maybe_labelled_expr();
+    }
+    p.ast.atIndex(task.output.handle).ptr.* = .{ .anon_call_expr = .{} };
+    return node.Ref(node.AnonCallExpr){ .handle = task.output.handle };
+}
+
+fn parse_maybe_labelled_expr(p: *Parser) node.Handle {
+    if (p.onLabel()) {
+        return p.parse_labelled_expr().handle;
+    }
+    return p.parse_expr().handle;
+}
+
+fn onLabel(p: *Parser) bool {
+    const marker = p.lexer;
+    const on_label = p.munch().type == .ident and p.munch().type == .colon;
+    p.lexer = marker;
+    return on_label;
+}
+
+fn parse_labelled_expr(p: *Parser) node.Ref(node.LabelledExpr) {
+    const task = p.startTask(node.LabelledExpr);
+    defer p.endTask(task);
+
+    task.set(p, .label, p.parse_ident());
+    if (!p.skipIf(.colon)) return task.output;
+    task.set(p, .expr, p.parse_expr());
+
+    return task.output;
+}
 
 fn ParseTask(comptime N: type) type {
     return struct {
