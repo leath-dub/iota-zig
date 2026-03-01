@@ -258,11 +258,48 @@ fn parseUnaryGroup(p: *Parser) node.Expr {
 fn parsePostfixGroup(p: *Parser) node.Expr {
     const left = p.parseAtomExpr();
     switch (p.at().type) {
-        // .lbracket => return .{ .coll_access = p.parseCollAccesExpr() },
+        .lbracket => return .{ .coll_access = p.parseCollAccessExpr(left) },
         // .inc, .dec, .bang, .qmark => return .{ .postfix = p.parsePostfixExpr() },
         else => {},
     }
     return left;
+}
+
+fn parseCollAccessExpr(p: *Parser, lvalue_: node.Expr) node.CollAccessExpr {
+    const lvalue = p.ast.box(ok(lvalue_));
+    return p.createInit(node.CollAccessExpr, .{
+        .lvalue = lvalue,
+        .subscript = p.ast.box(p.parseCollSubscript()),
+    });
+}
+
+fn parseCollSubscript(p: *Parser) node.CollSubscript {
+    if (!p.skipIf(.lbracket)) return .dirty;
+
+    if (p.on(.colon)) {
+        return .{ .range = p.parseSliceRange(null) };
+    }
+
+    const begin = p.parseExpr();
+    if (p.on(.colon)) {
+        return .{ .range = p.parseSliceRange(begin) };
+    }
+
+    if (!p.skipIf(.rbracket)) return .dirty;
+
+    return .{ .expr = begin };
+}
+
+fn parseSliceRange(p: *Parser, begin: ?node.Expr) node.SliceRange {
+    var range = p.create(node.SliceRange);
+    if (!p.skipIf(.colon)) return err(range);
+    if (begin) |b| {
+        range.begin = b;
+    }
+    if (!p.on(.rbracket)) {
+        range.end = p.parseExpr();
+    }
+    return ok(range);
 }
 
 fn parseAtomExpr(p: *Parser) node.Expr {
@@ -323,7 +360,7 @@ fn parseScopedIdent(p: *Parser) node.ScopedIdent {
 
 fn emptyIdent(p: *Parser) node.Ident {
     var ident = p.create(node.Ident);
-    ident.token = .{ .type = .empty, .span = p.at().span[0..0] };
+    ident.token = .{ .type = .empty, .span = "<empty>" };
     return ok(ident);
 }
 
@@ -532,10 +569,12 @@ fn oneOrMoreDelimWithFirst(p: *Parser, comptime T: type, first: ?T, comptime fun
             if (p.on(e)) {
                 break;
             }
+            _ = p.next();
             values.append(p.ctx.allocator, func(p)) catch @panic("OOM");
         }
     } else {
         while (p.on(delim)) {
+            _ = p.next();
             values.append(p.ctx.allocator, func(p)) catch @panic("OOM");
         }
     }

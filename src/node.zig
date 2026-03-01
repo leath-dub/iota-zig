@@ -295,25 +295,25 @@ pub const LabelledExpr = struct {
 };
 
 pub const CollAccessExpr = struct {
-    head: Head,
+    head: Head = .{},
     lvalue: *Expr,
-    subscript: CollSubscript,
+    subscript: *CollSubscript,
 };
 
 pub const CollSubscript = union(enum) {
-    expr: *Expr,
+    expr: Expr,
     range: SliceRange,
     dirty,
 };
 
 pub const SliceRange = struct {
-    head: Head,
-    begin: ?*Expr,
-    end: ?*Expr,
+    head: Head = .{},
+    begin: ?Expr = null,
+    end: ?Expr = null,
 };
 
 pub const FieldAccessExpr = struct {
-    head: Head,
+    head: Head = .{},
     value: *Expr,
     field: Ident,
 };
