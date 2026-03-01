@@ -61,7 +61,7 @@ fn parseDecl(p: *Parser) node.Decl {
     again: switch (p.at().type) {
         .kw_let, .kw_var, .kw_def => return .{ .@"var" = p.parseVarDecl() },
         // .kw_fun => p.parse_fun_decl(),
-        // .kw_type => _ = p.parse_type_decl(.semicolon),
+        .kw_type => return .{ .type = p.parseTypeDecl() },
         else => if (p.expectOneOf(.{ .kw_let, .kw_var, .kw_def, .kw_fun, .kw_type })) {
             continue :again p.at().type;
         },
@@ -91,6 +91,16 @@ fn parseVarDecl(p: *Parser) node.VarDecl {
     if (!p.skipIf(.semicolon)) return err(var_decl);
 
     return ok(var_decl);
+}
+
+fn parseTypeDecl(p: *Parser) node.TypeDecl {
+    var type_decl = p.create(node.TypeDecl);
+    if (!p.skipIf(.kw_type)) return err(type_decl);
+    type_decl.name = p.parseIdent();
+    if (!p.skipIf(.equal)) return err(type_decl);
+    type_decl.type = p.parseType();
+    if (!p.skipIf(.semicolon)) return err(type_decl);
+    return ok(type_decl);
 }
 
 fn parseType(p: *Parser) node.Type {
@@ -139,8 +149,8 @@ fn parseStructField(p: *Parser) node.StructField {
     if (!p.skipIf(.colon)) return err(field);
     field.type = p.parseType();
     if (p.on(.equal)) {
-        // TODO expressions
-        unreachable;
+        _ = p.next();
+        field.default = p.parseExpr();
     }
     return ok(field);
 }
@@ -148,13 +158,12 @@ fn parseStructField(p: *Parser) node.StructField {
 fn parseCollType(p: *Parser) node.CollType {
     var coll = p.create(node.CollType);
     if (!p.skipIf(.lbracket)) return err(coll);
-    if (p.on(.rbracket)) {
-        _ = p.next();
-        coll.value_type = p.ast.box(p.parseType());
-        return ok(coll);
+    if (!p.on(.rbracket)) {
+        coll.index_expr = p.parseExpr();
     }
-    // TODO expressions
-    unreachable;
+    if (!p.skipIf(.rbracket)) return err(coll);
+    coll.value_type = p.ast.box(p.parseType());
+    return ok(coll);
 }
 
 fn parseIdent(p: *Parser) node.Ident {
@@ -259,14 +268,21 @@ fn parsePostfixGroup(p: *Parser) node.Expr {
     const left = p.parseAtomExpr();
     switch (p.at().type) {
         .lbracket => return .{ .coll_access = p.parseCollAccessExpr(left) },
-        // .inc, .dec, .bang, .qmark => return .{ .postfix = p.parsePostfixExpr() },
+        .inc, .dec, .bang, .qmark => return .{ .postfix = p.createPostfixExpr(left) },
         else => {},
     }
     return left;
 }
 
-fn parseCollAccessExpr(p: *Parser, lvalue_: node.Expr) node.CollAccessExpr {
-    const lvalue = p.ast.box(ok(lvalue_));
+fn createPostfixExpr(p: *Parser, left: node.Expr) node.PostfixExpr {
+    return p.createInit(node.PostfixExpr, .{
+        .op = p.munch(),
+        .operand = p.ast.box(left),
+    });
+}
+
+fn parseCollAccessExpr(p: *Parser, left: node.Expr) node.CollAccessExpr {
+    const lvalue = p.ast.box(ok(left));
     return p.createInit(node.CollAccessExpr, .{
         .lvalue = lvalue,
         .subscript = p.ast.box(p.parseCollSubscript()),
@@ -304,6 +320,7 @@ fn parseSliceRange(p: *Parser, begin: ?node.Expr) node.SliceRange {
 
 fn parseAtomExpr(p: *Parser) node.Expr {
     return again: switch (p.at().type) {
+        .lparen => p.parseParenOrAnonCallExpr(),
         .scope, .ident => .{ .scoped_ident = p.parseScopedIdent() },
         .char_lit, .string_lit, .int_lit, .float_lit, .kw_true, .kw_false => .{ .token_expr = p.createTokenExpr() },
         .kw_u8,
@@ -321,6 +338,7 @@ fn parseAtomExpr(p: *Parser) node.Expr {
         .kw_string,
         => .{ .builtin_type = p.createBuiltinType() },
         else => if (p.expectOneOf(.{
+            .lparen,
             .scope,
             .ident,
             .char_lit,
@@ -345,6 +363,76 @@ fn parseAtomExpr(p: *Parser) node.Expr {
             continue :again p.at().type;
         } else .dirty,
     };
+}
+
+fn parseParenOrAnonCallExpr(p: *Parser) node.Expr {
+    if (!p.skipIf(.lparen)) return .dirty;
+    if (p.on(.rparen)) {
+        _ = p.next();
+        return .{ .anon_call = .{} };
+    }
+
+    const first = p.parseCallExprArg();
+    switch (first) {
+        .labelled => {
+            return .{ .anon_call = p.handleAnonCallExpr(first) };
+        },
+        .dirty => return .dirty,
+        else => {},
+    }
+
+    return again: switch (p.at().type) {
+        .comma => .{ .anon_call = p.handleAnonCallExpr(first) },
+        .rparen => p.handleParenExpr(first.expr),
+        else => if (p.expectOneOf(.{ .comma, .rparen })) {
+            continue :again p.at().type;
+        } else .dirty,
+    };
+}
+
+fn handleParenExpr(p: *Parser, sub_expr_: node.Expr) node.Expr {
+    var sub_expr = sub_expr_;
+    if (!p.skipIf(.rparen)) switch (sub_expr) {
+        .dirty => {},
+        inline else => |*ex| {
+           ex.head.flags.insert(.dirty);
+        },
+    };
+    return sub_expr;
+}
+
+const MaybeLabelledExpr = union(enum) {
+    labelled: node.LabelledExpr,
+    unlabelled: node.Expr,
+};
+
+fn parseCallExprArg(p: *Parser) node.CallExprArg {
+    if (p.onLabel()) {
+        return .{ .labelled = p.parseLabelledExpr() };
+    }
+    return .{ .expr = p.parseExpr() };
+}
+
+fn onLabel(p: *Parser) bool {
+    const marker = p.lexer;
+    const on_label = p.munch().type == .ident and p.munch().type == .colon;
+    p.lexer = marker;
+    return on_label;
+}
+
+fn parseLabelledExpr(p: *Parser) node.LabelledExpr {
+    var labelled_expr = p.create(node.LabelledExpr);
+    labelled_expr.label = p.parseIdent();
+    if (!p.skipIf(.colon)) return err(labelled_expr);
+    labelled_expr.expr = p.parseExpr();
+    return ok(labelled_expr);
+}
+
+fn handleAnonCallExpr(p: *Parser, first: node.CallExprArg) node.AnonCallExpr {
+    var call = p.create(node.AnonCallExpr);
+    call.args = p.zeroOrMoreDelimWithFirst(node.CallExprArg, first, parseCallExprArg, .comma, .rparen);
+    if (!p.skipIf(.rparen)) return err(call);
+    return ok(call);
 }
 
 fn parseScopedIdent(p: *Parser) node.ScopedIdent {
@@ -555,7 +643,7 @@ fn zeroOrMore(p: *Parser, comptime T: type, comptime func: fn (p: *Parser) T, co
     return p.ast.own(T, values.items);
 }
 
-fn oneOrMoreDelimWithFirst(p: *Parser, comptime T: type, first: ?T, comptime func: fn (p: *Parser) T, delim: TokenType, end: ?TokenType) []T {
+fn delimWithFirst(p: *Parser, comptime T: type, first: ?T, comptime func: fn (p: *Parser) T, delim: TokenType, end: ?TokenType, at_least_one: bool) []T {
     var values: std.ArrayList(T) = .{};
     defer values.deinit(p.ctx.allocator);
 
@@ -563,13 +651,15 @@ fn oneOrMoreDelimWithFirst(p: *Parser, comptime T: type, first: ?T, comptime fun
         values.append(p.ctx.allocator, f) catch @panic("OOM");
     }
 
-    values.append(p.ctx.allocator, func(p)) catch @panic("OOM");
+    if (at_least_one) {
+        values.append(p.ctx.allocator, func(p)) catch @panic("OOM");
+    }
     if (end) |e| {
         while (p.on(delim)) {
+            _ = p.next();
             if (p.on(e)) {
                 break;
             }
-            _ = p.next();
             values.append(p.ctx.allocator, func(p)) catch @panic("OOM");
         }
     } else {
@@ -580,6 +670,14 @@ fn oneOrMoreDelimWithFirst(p: *Parser, comptime T: type, first: ?T, comptime fun
     }
 
     return p.ast.own(T, values.items);
+}
+
+fn oneOrMoreDelimWithFirst(p: *Parser, comptime T: type, first: ?T, comptime func: fn (p: *Parser) T, delim: TokenType, end: ?TokenType) []T {
+    return p.delimWithFirst(T, first, func, delim, end, true);
+}
+
+fn zeroOrMoreDelimWithFirst(p: *Parser, comptime T: type, first: ?T, comptime func: fn (p: *Parser) T, delim: TokenType, end: ?TokenType) []T {
+    return p.delimWithFirst(T, first, func, delim, end, false);
 }
 
 fn oneOrMoreDelim(p: *Parser, comptime T: type, comptime func: fn (p: *Parser) T, delim: TokenType, end: ?TokenType) []T {

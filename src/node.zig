@@ -59,9 +59,9 @@ pub const FunParam = struct {
 };
 
 pub const TypeDecl = struct {
-    head: Head,
-    name: Ident,
-    type: Type,
+    head: Head = .{},
+    name: Ident = .{},
+    type: Type = .dirty,
 };
 
 pub const Type = union(enum) {
@@ -240,7 +240,7 @@ pub const Expr = union(enum) {
     unary: UnaryExpr,
     bin: BinExpr,
     // Atomic expressions
-    anon_call_expr: AnonCallExpr,
+    anon_call: AnonCallExpr,
     token_expr: TokenExpr,
     builtin_type: BuiltinType,
     scoped_ident: ScopedIdent,
@@ -278,8 +278,8 @@ pub const CallExpr = struct {
 };
 
 pub const AnonCallExpr = struct {
-    head: Head,
-    args: []CallExprArg,
+    head: Head = .{},
+    args: []CallExprArg = &.{},
 };
 
 pub const CallExprArg = union(enum) {
@@ -289,9 +289,9 @@ pub const CallExprArg = union(enum) {
 };
 
 pub const LabelledExpr = struct {
-    head: Head,
-    label: Ident,
-    expr: Expr,
+    head: Head = .{},
+    label: Ident = .{},
+    expr: Expr = .dirty,
 };
 
 pub const CollAccessExpr = struct {

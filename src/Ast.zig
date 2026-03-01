@@ -40,7 +40,8 @@ pub fn own(ast: *Ast, comptime T: type, items: []T) []T {
     return ast.node_alloc.allocator().dupe(T, items) catch @panic("OOM");
 }
 
-fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: type, item: *Item, listener: *Listener) void {
+fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: type, item: *Item, listener: *Listener) ChildDisposition {
+    var result: ChildDisposition = .walk;
     const callback_name = name ++ @typeName(Item);
     if (comptime meta.hasMethod(Listener, callback_name)) {
         const Args = meta.ArgsTuple(@TypeOf(@field(Listener, callback_name)));
@@ -49,7 +50,10 @@ fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: t
         {
             @compileError("function named " ++ callback_name ++ " has invalid argument types");
         }
-        @field(Listener, callback_name)(listener, item);
+        const ret = @field(Listener, callback_name)(listener, item);
+        if (comptime @TypeOf(ret) == ChildDisposition) {
+            result = ret;
+        }
     }
     const generic_callback_name = name;
     if (comptime meta.hasMethod(Listener, generic_callback_name)) {
@@ -59,8 +63,12 @@ fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: t
         {
             @compileError("function named " ++ generic_callback_name ++ " has invalid argument types");
         }
-        @field(Listener, generic_callback_name)(listener, @unionInit(Node, @tagName(TypeTag(Item)), item));
+        const ret = @field(Listener, generic_callback_name)(listener, @unionInit(Node, @tagName(TypeTag(Item)), item));
+        if (@TypeOf(ret) == ChildDisposition and result != .skip) {
+            result = ret;
+        }
     }
+    return result; 
 }
 
 fn forEachChild(comptime Item: type, item: *Item, ctx: anytype, handle: anytype) void {
@@ -98,7 +106,11 @@ pub fn walk(listener: anytype, item: anytype) void {
     const Listener = @typeInfo(@TypeOf(listener)).pointer.child;
 
     if (comptime isNode(Item)) {
-        callback("enter", Item, Listener, item, listener);
+        if (callback("enter", Item, Listener, item, listener) == .skip) {
+            // Skip requested, be sure to call exit handlers
+            _ = callback("exit", Item, Listener, item, listener);
+            return;
+        }
     }
 
     switch (@typeInfo(Item)) {
@@ -110,7 +122,7 @@ pub fn walk(listener: anytype, item: anytype) void {
     }
 
     if (comptime isNode(Item)) {
-        callback("exit", Item, Listener, item, listener);
+        _ = callback("exit", Item, Listener, item, listener);
     }
 }
 
@@ -250,6 +262,11 @@ pub const Node = blk: {
     });
 };
 
+pub const ChildDisposition = enum {
+    walk,
+    skip,
+};
+
 pub fn getNodeHead(item: Ast.Node) *node.Head {
     return switch (item) {
         inline else => |data| &data.head,
@@ -322,10 +339,15 @@ pub const Dumper = struct {
         return false;
     }
 
-    fn emit(d: *Dumper, item: Ast.Node) void {
+    fn emit(d: *Dumper, item: Ast.Node, dirty: bool) void {
         switch (std.meta.activeTag(item)) {
             inline else => |tag| {
                 const data, const len = comptimeCamelCase(@tagName(tag));
+                // Print as error node if it has an error
+                if (dirty) {
+                    d.bind(d.writer.print("Error[{s}]\n", .{data[0..len]}));
+                    return;
+                }
                 d.bind(d.writer.writeAll(data[0..len]));
 
                 var count: u32 = 0;
@@ -356,13 +378,14 @@ pub const Dumper = struct {
         d.is_last.resize(d.ctx.allocator, d.is_last.bit_length - 1, false) catch unreachable;
     }
 
-    pub fn enter(d: *Dumper, item: Ast.Node) void {
+    pub fn enter(d: *Dumper, item: Ast.Node) ChildDisposition {
         const hd = Ast.getNodeHead(item);
+        const is_dirty = hd.flags.contains(.dirty);
         const is_last = hd.flags.contains(.last_child);
         if (d.is_last.bit_length == 0) {
-            d.emit(item);
+            d.emit(item, is_dirty);
             d.pushIsLast(is_last);
-            return;
+            return if (is_dirty) .skip else .walk;
         }
 
         for (1..d.is_last.bit_length) |i| {
@@ -373,8 +396,9 @@ pub const Dumper = struct {
         const prefix = if (is_last) last_child_str else some_child_str;
         d.bind(d.writer.writeAll(prefix));
 
-        d.emit(item);
+        d.emit(item, is_dirty);
         d.pushIsLast(is_last);
+        return if (is_dirty) .skip else .walk;
     }
 
     pub fn exit(d: *Dumper, _: Ast.Node) void {

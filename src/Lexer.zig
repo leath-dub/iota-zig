@@ -215,7 +215,7 @@ pub fn skipWhitespace(l: *Lexer) void {
             '\n', '\t', '\r', ' ' => {},
             '/' => if (l.ahead('/')) {
                 in_comment = true;
-            },
+            } else break,
             else => break,
         }
     }
@@ -893,14 +893,6 @@ const LexerTest = struct {
             lexer.consume();
         }
     }
-
-    pub fn expectTokenTypes2(t: *LexerTest, text: []const u8, types: []const TokenType) !void {
-        var lexer = Lexer.init(&t.gc, &t.syntax, try .init(&t.syntax, "<test input>", text));
-        for (types) |ty| {
-            try std.testing.expectEqual(ty, lexer.peek().type);
-            lexer.consume();
-        }
-    }
 };
 
 test "integer lexing" {
@@ -1031,9 +1023,27 @@ test "EOF produced" {
     t.setUp();
     defer t.tearDown();
 
-    try t.expectTokenTypes2("foo", &.{ .ident, .eof });
-    try t.expectTokenTypes2("foo", &.{ .ident, .eof, .eof });
-    try t.expectTokenTypes2("", &.{ .eof, .eof });
+    try t.expectTokenTypes("foo", &.{ .ident, .eof });
+    try t.expectTokenTypes("foo", &.{ .ident, .eof, .eof });
+    try t.expectTokenTypes("", &.{ .eof, .eof });
+}
+
+test "Misc tests" {
+    var t: LexerTest = undefined;
+    t.setUp();
+    defer t.tearDown();
+    try t.expectTokenTypes("let _ = 1 + 2/3;", &.{
+        .kw_let,
+        .ident,
+        .equal,
+        .int_lit,
+        .plus,
+        .int_lit,
+        .slash,
+        .int_lit,
+        .semicolon,
+        .eof,
+    });
 }
 
 // test "fuzz test" {
