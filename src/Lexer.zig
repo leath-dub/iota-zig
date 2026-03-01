@@ -164,8 +164,8 @@ pub const Lit = union(enum) {
 };
 
 pub const Token = struct {
-    type: TokenType,
-    span: []const u8,
+    type: TokenType = .invalid,
+    span: []const u8 = "<unitialized token>",
     lit: ?Lit = null,
 
     pub fn offset(t: Token, code: Code) usize {
@@ -176,11 +176,7 @@ pub const Token = struct {
     }
 
     pub fn format(t: Token, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        const name = @tagName(t.type);
-        try w.print("{s}", .{name});
-        if (t.lit != null) {
-            try w.print("({s})", .{t.span});
-        }
+        try w.print("{s}", .{t.span});
     }
 };
 

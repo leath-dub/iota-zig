@@ -1,318 +1,323 @@
+const std = @import("std");
+
 const Token = @import("Lexer.zig").Token;
+const Code = @import("Code.zig");
 
-pub const Handle = u32;
+// TODO: Ast walking will be done using metaprogramming
+// We pass pointers down to fill memory in sum routines (e.g. parse_decl)
 
-pub fn Ref(comptime N: type) type {
-    return struct {
-        pub const Child = N;
-        handle: Handle,
-    };
-}
+pub const Flag = enum {
+    dirty,
+    last_child,
+};
 
-pub fn Deref(comptime R: type) type {
-    if (!@hasDecl(R, "Child") or Ref(R.Child) != R) {
-        @compileLog(R);
-        @compileError("cannot deref type not instanciated with node.Ref");
-    }
-    return R.Child;
-}
-
-pub fn Access(comptime N: type) type {
-    return struct {
-        ptr: *N,
-        handle: Handle,
-    };
-}
+pub const Head = struct {
+    flags: std.EnumSet(Flag) = .initEmpty(),
+    position: Code.Offset = 0,
+};
 
 pub const SourceFile = struct {
-    imports: Ref(Imports),
-    decls: Ref(Decls),
+    head: Head = .{},
+    imports: []Import = &.{},
+    decls: []Decl = &.{},
 };
 
-pub const Decls = struct {
-    pub const child = .{.decl};
-};
-
-pub const Imports = struct {
-    pub const child = .{.import};
-};
-
-pub const Decl = struct {
-    pub const child = .{
-        .var_decl,
-        .fun_decl,
-        .type_decl,
-    };
+pub const Decl = union(enum) {
+    @"var": VarDecl,
+    fun: FunDecl,
+    type: TypeDecl,
+    dirty,
 };
 
 pub const Import = struct {
-    module: Token,
+    head: Head = .{},
+    module: Token = .{},
 };
 
 pub const VarDecl = struct {
-    declarator: Token,
-    name: Ref(Ident),
-    type: ?Ref(Type),
-    init_expr: ?Ref(Expr),
+    head: Head = .{},
+    declarator: Token = .{},
+    name: Ident = .{},
+    type: ?Type = null,
+    init_expr: ?Expr = null,
 };
 
 pub const FunDecl = struct {
-    name: Ref(ScopedIdent),
-    params: Ref(FunParams),
+    head: Head,
+    name: ScopedIdent,
+    params: []FunParam,
     local: bool,
-    return_type: ?Ref(Type),
-    body: Ref(CompStmt),
-};
-
-pub const FunParams = struct {
-    pub const child = .{.fun_param};
+    return_type: ?Type,
+    body: CompStmt,
 };
 
 pub const FunParam = struct {
-    name: Ref(Ident),
-    type: Ref(Type),
+    head: Head,
+    name: Ident,
+    type: Type,
     unwrap: bool,
 };
 
 pub const TypeDecl = struct {
-    name: Ref(Ident),
-    type: Ref(Type),
+    head: Head,
+    name: Ident,
+    type: Type,
 };
 
-pub const Type = struct {
-    pub const child = .{
-        .builtin_type,
-        .coll_type,
-        .tuple_type,
-        .struct_type,
-        .sum_type,
-        .enum_type,
-        .ptr_type,
-        .err_type,
-        .fun_type,
-    };
+pub const Type = union(enum) {
+    builtin: BuiltinType,
+    coll: CollType,
+    tuple: TupleType,
+    @"struct": StructType,
+    sum: SumType,
+    @"enum": EnumType,
+    ptr: PtrType,
+    err: ErrType,
+    fun: FunType,
+    dirty,
 };
 
 pub const BuiltinType = struct {
-    token: Token,
+    head: Head = .{},
+    token: Token = .{},
 };
 
 pub const CollType = struct {
-    index_expr: ?Ref(Expr),
-    value_type: Ref(Type),
+    head: Head = .{},
+    index_expr: ?Expr = null,
+    value_type: *Type = undefined,
 };
 
 pub const TupleType = struct {
-    pub const child = .{ .type, .type_decl };
-};
-
-pub const StructType = struct {
-    pub const child = .{.struct_field};
-};
-
-pub const StructField = struct {
-    name: Ref(Ident),
-    type: Ref(Type),
-    default: ?Ref(Expr),
+    head: Head,
+    args: []TypeOrInlineDecl,
 };
 
 pub const SumType = struct {
-    pub const child = .{ .type, .type_decl };
+    head: Head,
+    args: []TypeOrInlineDecl,
+};
+
+pub const TypeOrInlineDecl = union(enum) {
+    type: Type,
+    type_decl: TypeDecl,
+    dirty,
+};
+
+pub const StructType = struct {
+    head: Head = .{},
+    fields: []StructField = &.{},
+};
+
+pub const StructField = struct {
+    head: Head = .{},
+    name: Ident = .{},
+    type: Type = .dirty,
+    default: ?Expr = null,
 };
 
 pub const EnumType = struct {
-    pub const child = .{.ident};
+    head: Head,
+    args: []Ident,
 };
 
 pub const PtrType = struct {
-    // TODO add mut/immut information here
-    referent_type: Ref(Type),
+    head: Head,
+    referent_type: *Type,
 };
 
 pub const ErrType = struct {
-    pub const child = .{.type};
+    head: Head,
+    child: *Type,
 };
 
 pub const FunType = struct {
-    params: Ref(FunParams),
-    return_type: ?Ref(Type),
+    head: Head,
+    params: []FunParam,
+    return_type: ?*Type,
     is_local: bool,
 };
 
 pub const Ident = struct {
-    token: Token,
+    head: Head = .{},
+    token: Token = .{},
 };
 
 pub const ScopedIdent = struct {
-    pub const child = .{.ident};
+    head: Head,
+    idents: []Ident,
 };
 
-pub const Stmt = struct {
-    pub const child = .{
-        .decl,
-        .if_stmt,
-        .while_stmt,
-        .case_stmt,
-        .return_stmt,
-        .defer_stmt,
-        .comp_stmt,
-    };
+pub const Stmt = union(enum) {
+    decl: Decl,
+    if_stmt: IfStmt,
+    while_stmt: WhileStmt,
+    case_stmt: CaseStmt,
+    return_stmt: ReturnStmt,
+    defer_stmt: DeferStmt,
+    comp_stmt: CompStmt,
+    dirty,
 };
 
 pub const IfStmt = struct {
-    cond: Ref(Cond),
-    then_arm: Ref(CompStmt),
-    else_arm: ?Ref(Else),
+    head: Head,
+    cond: Cond,
+    then_arm: CompStmt,
+    else_arm: ?Else,
 };
 
-pub const Else = struct {
-    pub const child = .{ .if_stmt, .comp_stmt };
+pub const Else = union(enum) {
+    if_stmt: *IfStmt,
+    comp_stmt: CompStmt,
+    dirty,
 };
 
 pub const WhileStmt = struct {
-    cond: Ref(Cond),
-    block: Ref(CompStmt),
+    head: Head,
+    cond: Cond,
+    block: CompStmt,
 };
 
-pub const Cond = struct {
-    pub const child = .{ .sum_type_reduce, .expr };
+pub const Cond = union(enum) {
+    sum_type_reduce: SumTypeReduce,
+    expr: Expr,
+    dirty,
 };
 
 pub const SumTypeReduce = struct {
-    name: Ref(Ident),
-    reduction: Ref(Type),
-    value: Ref(Expr),
+    head: Head,
+    name: Ident,
+    reduction: Type,
+    value: Expr,
 };
 
 pub const CaseStmt = struct {
-    arg: Ref(Expr),
-    branches: Ref(CaseBranches),
-};
-
-pub const CaseBranches = struct {
-    pub const child = .{.case_branch};
+    head: Head,
+    arg: Expr,
+    branches: []CaseBranch,
 };
 
 pub const CaseBranch = struct {
-    patt: Ref(CasePatt),
-    action: Ref(Stmt),
+    head: Head,
+    patt: CasePatt,
+    action: Stmt,
 };
 
-pub const CasePatt = struct {
-    pub const child = .{
-        .type,
-        .expr,
-        .case_binding,
-        .case_default,
-    };
+pub const CasePatt = union(enum) {
+    type: Type,
+    expr: Expr,
+    binding: CaseBinding,
+    default,
+    dirty,
 };
 
 pub const CaseBinding = struct {
-    name: Ref(Ident),
-    type: Ref(Type),
+    head: Head,
+    name: Ident,
+    type: Type,
 };
 
-pub const CaseDefault = struct {};
-
 pub const ReturnStmt = struct {
-    pub const child = .{.expr};
+    head: Head,
+    child: Expr,
 };
 
 pub const DeferStmt = struct {
-    pub const child = .{.stmt};
+    head: Head,
+    child: Expr,
 };
 
 pub const CompStmt = struct {
-    pub const child = .{.stmt};
+    head: Head,
+    stmts: []Stmt,
 };
 
-pub const Expr = struct {
-    pub const child = .{
-        .atom_expr,
-        .postfix_expr,
-        .call_expr,
-        .field_access_expr,
-        .coll_access_expr,
-        .unary_expr,
-        .bin_expr,
-    };
+pub const Expr = union(enum) {
+    atom: AtomExpr,
+    postfix: PostfixExpr,
+    call: CallExpr,
+    field_access: FieldAccessExpr,
+    coll_access: CollAccessExpr,
+    unary: UnaryExpr,
+    bin: BinExpr,
+    dirty,
 };
 
-pub const AtomExpr = struct {
-    pub const child = .{
-        .paren_expr,
-        .anon_call_expr,
-        .token_expr,
-        .builtin_type,
-        .scoped_ident,
-    };
+pub const AtomExpr = union(enum) {
+    anon_call_expr: AnonCallExpr,
+    token_expr: TokenExpr,
+    builtin_type: BuiltinType,
+    scoped_ident: ScopedIdent,
+    dirty,
 };
 
 pub const TokenExpr = struct {
+    head: Head,
     token: Token,
 };
 
 pub const PostfixExpr = struct {
+    head: Head,
     op: Token,
-    operand: Ref(Expr),
+    operand: *Expr,
 };
 
 pub const UnaryExpr = struct {
+    head: Head,
     op: Token,
-    operand: Ref(Expr),
+    operand: *Expr,
 };
 
 pub const BinExpr = struct {
+    head: Head,
     op: Token,
-    left: Ref(Expr),
-    right: Ref(Expr),
+    left: *Expr,
+    right: *Expr,
 };
 
 pub const CallExpr = struct {
-    callable: Ref(Expr),
-    args: Ref(CallExprArgs),
+    head: Head,
+    callable: *Expr,
+    args: []CallExprArg,
 };
 
 pub const AnonCallExpr = struct {
-    pub const child = .{.call_expr_args};
+    head: Head,
+    args: []CallExprArg,
 };
 
-pub const ParenExpr = struct {
-    pub const child = .{.expr};
-};
-
-pub const CallExprArgs = struct {
-    pub const child = .{ .labelled_expr, .expr };
+pub const CallExprArg = union(enum) {
+    labelled: LabelledExpr,
+    expr: Expr,
+    dirty,
 };
 
 pub const LabelledExpr = struct {
-    label: Ref(Ident),
-    expr: Ref(Expr),
+    head: Head,
+    label: Ident,
+    expr: Expr,
 };
 
 pub const CollAccessExpr = struct {
-    lvalue: Ref(Expr),
-    subscript: Ref(CollSubscript),
+    head: Head,
+    lvalue: *Expr,
+    subscript: CollSubscript,
 };
 
-pub const CollSubscript = struct {
-    pub const child = .{
-        .expr,
-        .slice_range,
-    };
+pub const CollSubscript = union(enum) {
+    expr: *Expr,
+    range: SliceRange,
+    dirty,
 };
 
 pub const SliceRange = struct {
-    begin: ?Ref(Expr),
-    end: ?Ref(Expr),
+    head: Head,
+    begin: ?*Expr,
+    end: ?*Expr,
 };
 
 pub const FieldAccessExpr = struct {
-    value: Ref(Expr),
-    field: Ref(Ident),
+    head: Head,
+    value: *Expr,
+    field: Ident,
 };
-
-// This is used so we don't accidently introduce a new ast node into this file.
-// If you actually want to add an ast node, be sure to increment this number
-// to curb the compilation errors.
-pub const ast_node_count: usize = 53;

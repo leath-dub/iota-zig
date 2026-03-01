@@ -2,6 +2,7 @@ const std = @import("std");
 const heap = std.heap;
 const fs = std.fs;
 const log = std.log;
+const mem = std.mem;
 
 const Code = @import("Code.zig");
 const Lexer = @import("Lexer.zig");

@@ -10,123 +10,166 @@ const mem = std.mem;
 const Ast = @This();
 
 ctx: *GeneralContext,
-storage: std.ArrayList(NodeEntry) = .{},
+root: ?node.SourceFile = null,
+node_alloc: std.heap.ArenaAllocator,
 
 pub fn init(ctx: *GeneralContext) Ast {
     return .{
         .ctx = ctx,
+        .node_alloc = ctx.createLifetime(),
     };
 }
 
 pub fn deinit(ast: *Ast) void {
-    ast.storage.deinit(ast.ctx.allocator);
+    ast.node_alloc.deinit();
 }
 
-pub fn at(ast: *Ast, ref: anytype) node.Access(node.Deref(@TypeOf(ref))) {
-    return .{
-        .ptr = &@field(ast.storage.items[ref.handle].node, @tagName(TypeTag(node.Deref(@TypeOf(ref))))),
-        .handle = ref.handle,
+// Allocate value on the heap
+pub fn box(ast: *Ast, value: anytype) *@TypeOf(value) {
+    const ptr = ast.node_alloc
+        .allocator()
+        .create(@TypeOf(value)) catch @panic("OOM");
+    ptr.* = value;
+    return ptr;
+}
+
+pub fn own(ast: *Ast, comptime T: type, items: []T) []T {
+    return ast.node_alloc.allocator().dupe(T, items) catch @panic("OOM");
+}
+
+fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: type, item: *Item, listener: *Listener) void {
+    const callback_name = name ++ @typeName(Item);
+    if (comptime meta.hasMethod(Listener, callback_name)) {
+        const Args = meta.ArgsTuple(@TypeOf(@field(Listener, callback_name)));
+        if (@FieldType(Args, "0") != *Listener or
+            @FieldType(Args, "1") != *Item) {
+            @compileError("function named " ++ callback_name ++ " has invalid argument types");
+        }
+        @field(Listener, callback_name)(listener, item);
+    }
+    const generic_callback_name = name;
+    if (comptime meta.hasMethod(Listener, generic_callback_name)) {
+        const Args = meta.ArgsTuple(@TypeOf(@field(Listener, generic_callback_name)));
+        if (@FieldType(Args, "0") != *Listener or
+            @FieldType(Args, "1") != Node) {
+            @compileError("function named " ++ generic_callback_name ++ " has invalid argument types");
+        }
+        @field(Listener, generic_callback_name)(
+            listener, @unionInit(Node, @tagName(TypeTag(Item)), item));
+    }
+}
+
+fn forEachChild(comptime Item: type, item: *Item, ctx: anytype, handle: anytype) void {
+    if (@typeInfo(Item) != .@"struct" or Item == Token) {
+        return;
+    }
+    inline for (meta.fields(Item)) |field| {
+        const skip = mem.eql(u8, field.name, "head") and field.type == node.Head;
+        if (!skip) {
+            const field_ref = &@field(item, field.name);
+            switch (@typeInfo(field.type)) {
+                .@"struct" => handle(ctx, field_ref),
+                .@"optional" => if (field_ref.*) |*child| {
+                    handle(ctx, child);
+                },
+                .@"union" => switch (field_ref.*) {
+                    inline else => |*child| handle(ctx, child),
+                },
+                .@"pointer" => |ptr| switch (ptr.size) {
+                    .one => handle(ctx, field_ref.*),
+                    .slice => for (field_ref.*) |*child| {
+                        handle(ctx, child);
+                    },
+                    .many => @compileError("Ast cannot store many pointer (i.e. [*]T)"),
+                    .c => @compileError("Ast cannot store c pointer (i.e. [*c]T)"),
+                },
+                else => {}, // TODO: serialize other data with default formatters
+            }
+        }
+    }
+}
+
+pub fn walk(listener: anytype, item: anytype) void {
+    const Item = @typeInfo(@TypeOf(item)).@"pointer".child;
+    const Listener = @typeInfo(@TypeOf(listener)).@"pointer".child;
+
+    if (comptime isNode(Item)) {
+        callback("enter", Item, Listener, item, listener);
+    }
+
+    switch (@typeInfo(Item)) {
+        .@"union" => switch (item.*) {
+            inline else => |*n| walk(listener, n),
+        },
+        .@"struct" => forEachChild(Item, item, listener, walk),
+        else => {},
+    }
+
+    if (comptime isNode(Item)) {
+        callback("exit", Item, Listener, item, listener);
+    }
+}
+
+fn getChild(ref: anytype) ?Ast.Node {
+    const N = @TypeOf(ref.*);
+    if (N == Token) {
+        return null;
+    }
+    return switch (@typeInfo(N)) {
+        .@"struct" =>
+            @unionInit(Ast.Node, @tagName(TypeTag(N)), ref),
+        .@"union" => switch (ref.*) {
+            inline else => |*alt| getChild(alt),
+        },
+        .@"pointer" => |ptr| switch (ptr.size) {
+            .one => getChild(ref.*),
+            .slice => if (ref.len > 0) getChild(&ref.*[ref.len - 1]) else null,
+            else => null,
+        },
+        .@"optional" => if (ref.* != null) getChild(&ref.*.?) else null,
+        else => null,
     };
 }
 
-pub fn atIndex(ast: *Ast, handle: node.Handle) node.Access(Node) {
-    return .{
-        .ptr = &ast.storage.items[handle].node,
-        .handle = handle,
-    };
-}
-
-pub fn entryConst(ast: Ast, handle: node.Handle) NodeEntry {
-    return ast.storage.items[handle];
-}
-
-pub fn entry(ast: *Ast, handle: node.Handle) *NodeEntry {
-    return &ast.storage.items[handle];
-}
-
-// NOTE: the expectation is that these functions are called in pre-order while
-// parsing. This allows for walking the tree in both post and pre order without
-// needing some auxillery structure - only need to keep track of how many children
-// each node has.
-pub fn startNode(ast: *Ast, comptime N: type) !node.Ref(N) {
-    const handle: node.Handle = @intCast(ast.storage.items.len);
-    if (N == Node) {
-        try ast.storage.append(ast.ctx.allocator, .{
-            .node = undefined,
-            .skip = 0,
-        });
-    } else {
-        try ast.storage.append(ast.ctx.allocator, .{
-            .node = @unionInit(Node, @tagName(TypeTag(N)), mem.zeroes(N)),
-            .skip = 0,
-        });
-    }
-    return .{ .handle = handle };
-}
-
-pub fn endNode(ast: *Ast, handle: node.Handle) void {
-    ast.storage.items[handle].skip = @intCast(ast.storage.items.len - handle);
-}
-
-pub fn walkPreOrder(ast: *Ast, walker: anytype) void {
-    for (0..ast.storage.items.len) |i| {
-        walker.enter(ast.atIndex(i));
-    }
-}
-
-pub fn walkPostOrder(ast: *Ast, walker: anytype) !void {
-    var pending = std.ArrayList(node.Handle).initCapacity(ast.ctx.allocator, 256);
-    defer pending.deinit(ast.ctx.allocator);
-
-    const nodes = ast.storage.items;
-
-    var i: usize = 0;
-    while (i < nodes.len or pending.items.len > 0) {
-        if (i < nodes.len) {
-            try pending.append(ast.ctx.allocator, i);
-            i += 1;
-        }
-
-        while (pending.items.len > 0) {
-            const top = pending.items[pending.items.len - 1];
-            if (i < top + nodes[top].skip) {
-                // Subtree not exausted as 'i' is still less than skip of
-                // the pending node
-                break;
+pub fn lastChild(item: anytype) ?Ast.Node {
+    var result: ?Ast.Node = null;
+    inline for (meta.fields(@TypeOf(item.*))) |field| {
+        const skip = comptime mem.eql(u8, field.name, "head") and field.type == node.Head;
+        if (!skip) {
+            if (getChild(&@field(item, field.name))) |n| {
+                result = n;
             }
-            walker.exit(ast.atIndex(pending.pop().?));
         }
     }
+    return result;
 }
 
-pub fn walk(ast: *Ast, walker: anytype) !void {
-    var pending = try std.ArrayList(node.Handle).initCapacity(ast.ctx.allocator, 256);
-    defer pending.deinit(ast.ctx.allocator);
+pub fn isNode(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct"
+        and @hasField(T, "head")
+        and @FieldType(T, "head") == node.Head;
+}
 
-    const nodes = ast.storage.items;
+pub const NodeTag = std.meta.FieldEnum(Node);
 
-    var i: u32 = 0;
-    while (i < nodes.len or pending.items.len > 0) {
-        if (i < nodes.len) {
-            walker.enter(ast.atIndex(i));
-            try pending.append(ast.ctx.allocator, i);
-            i += 1;
-        }
+pub fn TagType(comptime tag: NodeTag) type {
+    return @FieldType(Node, @tagName(tag));
+}
 
-        while (pending.items.len > 0) {
-            const top = pending.items[pending.items.len - 1];
-            if (i < top + nodes[top].skip) {
-                // Subtree not exausted as 'i' is still less than skip of
-                // the pending node
-                break;
+pub fn TypeTag(comptime T: type) NodeTag {
+    comptime {
+        for (std.meta.fields(Node)) |nf| {
+            if (*T == nf.type) {
+                return std.meta.stringToEnum(NodeTag, nf.name).?;
             }
-            walker.exit(ast.atIndex(pending.pop().?));
         }
+        @compileLog(T);
+        @compileError("type is not a AST node");
     }
 }
 
-fn comptimeSnakeCase(comptime text: []const u8) meta.Tuple(&.{ [text.len * 2 + 1]u8, usize }) {
-    var buf = mem.zeroes([text.len * 2 + 1]u8);
+fn comptimeSnakeCase(comptime text: []const u8) std.meta.Tuple(&.{ [text.len * 2 + 1]u8, usize }) {
+    var buf = std.mem.zeroes([text.len * 2 + 1]u8);
     var write: usize = 0;
     for (text) |ch_| {
         var ch = ch_;
@@ -143,83 +186,73 @@ fn comptimeSnakeCase(comptime text: []const u8) meta.Tuple(&.{ [text.len * 2 + 1
     return .{ buf, write };
 }
 
-// Automatically construct sum type from all the AST nodes defined in node.zig
-pub const Node = blk: {
-    var fields: [meta.declarations(node).len]std.builtin.Type.UnionField = undefined;
-    var alts: [fields.len]std.builtin.Type.EnumField = undefined;
+fn comptimeCamelCase(comptime text: []const u8) std.meta.Tuple(&.{ [text.len]u8, usize }) {
+    var buf = std.mem.zeroes([text.len]u8);
+    var write: usize = 0;
+    var upper = true;
+    for (text) |ch_| {
+        var ch = ch_;
+        if (ch == '_') {
+            upper = true;
+            continue;
+        }
+        if (upper) {
+            ch = std.ascii.toUpper(ch);
+            upper = false;
+        }
+        buf[write] = ch;
+        write += 1;
+    }
+    return .{ buf, write };
+}
 
-    var node_count: usize = 0;
-    for (meta.declarations(node)) |decl| {
+pub const Node = blk: {
+    const decls = std.meta.declarations(node);
+    var alts: [decls.len]std.builtin.Type.UnionField = undefined;
+    var tags: [decls.len]std.builtin.Type.EnumField = undefined;
+    var count: usize = 0;
+
+    for (std.meta.declarations(node)) |decl| {
         const T = @field(node, decl.name);
-        if (@TypeOf(T) == type and @typeInfo(T) == .@"struct") {
-            // E.g. IfStmt -. if_stmts field
+        if (@TypeOf(T) == type and @typeInfo(T) == .@"struct" and @hasField(T, "head")
+            and @FieldType(T, "head") == node.Head) {
             const data, const len = comptimeSnakeCase(decl.name);
-            fields[node_count] = .{
+            tags[count] = .{
                 .name = @ptrCast(data[0..len]),
-                .type = T,
-                .alignment = @alignOf(T),
+                .value = count,
             };
-            alts[node_count] = .{
+            alts[count] = .{
                 .name = @ptrCast(data[0..len]),
-                .value = node_count,
+                .type = *T,
+                .alignment = @alignOf(*T),
             };
-            node_count += 1;
+            count += 1;
         }
     }
-    if (node_count != node.ast_node_count) {
-        // If you are hitting this, make sure to either increment the `node.ast_node_count`
-        // variable or do not specify public (struct) types in `node.zig` that are not ast nodes
-        const msg = std.fmt.comptimePrint(
-            "mismatch between reported node count {d} and actual node count {d}",
-            .{ node.ast_node_count, node_count },
-        );
-        @compileError(msg);
-    }
 
-    const _Tag = @Type(.{
+    const Tag = @Type(.{
         .@"enum" = .{
             .tag_type = u32,
-            .fields = alts[0..node_count],
             .decls = &.{},
             .is_exhaustive = true,
+            .fields = tags[0..count],
         },
     });
 
     break :blk @Type(.{
         .@"union" = .{
             .layout = .auto,
-            .tag_type = _Tag,
-            .fields = fields[0..node_count],
+            .tag_type = Tag,
             .decls = &.{},
+            .fields = alts[0..count],
         },
     });
 };
 
-pub const NodeEntry = struct {
-    node: Node,
-    dirty: bool = false,
-    position: Code.Offset = 0,
-    // This stores how many nodes you need to skip to get the sibling of this
-    // node
-    skip: u16,
-};
-
-pub const NodeTag = meta.FieldEnum(Node);
-
-pub fn TagType(comptime tag: NodeTag) type {
-    return @FieldType(Node, @tagName(tag));
-}
-
-pub fn TypeTag(comptime T: type) NodeTag {
-    comptime {
-        for (meta.fields(Node)) |nf| {
-            if (T == nf.type) {
-                return meta.stringToEnum(NodeTag, nf.name).?;
-            }
-        }
-        @compileLog(T);
-        @compileError("type is not a AST node");
-    }
+pub fn getNodeHead(item: Ast.Node) *node.Head {
+    return switch (item) {
+        inline else => |data| &data.head,
+    };
 }
 
 // Outputs Ast in a form like so:
@@ -229,89 +262,143 @@ pub fn TypeTag(comptime T: type) NodeTag {
 // |     \- doo
 // \- bil
 //    \- bob
-const Dumper = struct {
-    ast: *const Ast,
-    allocator: std.mem.Allocator,
-    parent_stack: std.ArrayList(node.Handle) = .{},
-    is_last_stack: std.ArrayList(bool) = .{},
+pub const Dumper = struct {
+    ctx: *GeneralContext,
+    is_last: std.DynamicBitSetUnmanaged,
     writer: *std.Io.Writer,
+    err: ?std.Io.Writer.Error = null,
 
-    fn deinit(d: *Dumper) void {
-        d.parent_stack.deinit(d.allocator);
-        d.is_last_stack.deinit(d.allocator);
-    }
+    const done_child_str = "   ";
+    const more_child_str = "│  ";
+    const some_child_str = "├─ ";
+    const last_child_str = "└─ ";
 
-    fn isLastSibling(d: *Dumper, h: node.Handle) bool {
-        if (d.parent_stack.items.len == 0) {
-            return false;
-        }
-        const parent = d.parent_stack.items[d.parent_stack.items.len - 1];
-        return parent + d.ast.entryConst(parent).skip ==
-            h + d.ast.entryConst(h).skip;
-    }
-
-    fn nodeName(n: *Node) []const u8 {
-        return switch (meta.activeTag(n.*)) {
-            inline else => |tag| @tagName(tag),
+    pub fn init(ctx: *GeneralContext, writer: *std.Io.Writer) Dumper {
+        return .{
+            .ctx = ctx,
+            .is_last = std.DynamicBitSetUnmanaged.initEmpty(ctx.allocator, 0) catch @panic("OOM"),
+            .writer = writer,
         };
     }
 
-    fn printNode(d: *Dumper, n: node.Access(Node)) void {
-        d.writer.print("{s}", .{nodeName(n.ptr)}) catch unreachable;
-        switch (n.ptr.*) {
-            inline else => |conc_n| {
-                inline for (meta.fields(@TypeOf(conc_n))) |f| {
-                    if (f.type == Token) {
-                        d.writer.print(" {s}=`{s}`", .{ f.name, @field(conc_n, f.name).span }) catch unreachable;
-                    }
-                }
-            },
-        }
-        d.writer.writeByte('\n') catch unreachable;
+    pub fn deinit(d: *Dumper) void {
+        d.is_last.deinit(d.ctx.allocator);
     }
 
-    fn enter(d: *Dumper, n: node.Access(Node)) void {
-        if (d.is_last_stack.items.len == 0) {
-            d.printNode(n);
-            d.parent_stack.append(d.allocator, n.handle) catch unreachable;
-            d.is_last_stack.append(d.allocator, true) catch unreachable;
+    fn bind(d: *Dumper, res: anytype) void {
+        res catch |e| if (d.err == null) {
+            d.err = e;
+        };
+    }
+
+    fn emitAuxData(d: *Dumper, comptime name: []const u8, comptime fmt: []const u8, data: anytype, count: u32) void {
+        d.bind(d.writer.writeAll(if (count == 0) "(" else ", "));
+        d.bind(d.writer.print("{s}: " ++ fmt, .{name, data}));
+    }
+
+    fn handleAuxData(d: *Dumper, comptime name: []const u8, comptime T: type, data_ref: anytype, count: u32) bool {
+        const skip = comptime mem.eql(u8, name, "head") and T == node.Head;
+        if (skip or getChild(data_ref) != null) {
+            return false;
+        }
+        switch (@typeInfo(T)) {
+            .@"struct" => if (meta.hasMethod(T, "format")) {
+                d.emitAuxData(name, "{f}", data_ref.*, count);
+                return true;
+            },
+            .@"optional" => if (data_ref.*) |*data| {
+                return d.handleAuxData(name, @TypeOf(data.*), data, count);
+            },
+            .bool => {
+                d.emitAuxData(name, "{any}", data_ref.*, count);
+                return true;
+            },
+            .int, .float => {
+                d.emitAuxData(name, "{d}", data_ref.*, count);
+                return true;
+            },
+            .@"enum" => {
+                d.emitAuxData(name, "{t}", data_ref.*, count);
+                return true;
+            },
+            // TODO: .array => ???,
+            // TODO: .@"union" => ???,
+            else => {},
+        }
+        return false;
+    }
+
+    fn emit(d: *Dumper, item: Ast.Node) void {
+        switch (std.meta.activeTag(item)) {
+            inline else => |tag| {
+                const data, const len = comptimeCamelCase(@tagName(tag));
+                d.bind(d.writer.writeAll(data[0..len]));
+
+                var count: u32 = 0;
+                const item_ref = @field(item, @tagName(tag));
+
+                // Dump any none node fields as extra data
+                inline for (meta.fields(@TypeOf(item_ref.*))) |field| {
+                    if (d.handleAuxData(field.name, field.type, &@field(item_ref, field.name), count)) {
+                        count += 1;
+                    }
+                }
+
+                if (count != 0) {
+                    d.bind(d.writer.writeByte(')'));
+                }
+
+                d.bind(d.writer.writeByte('\n'));
+            },
+        }
+    }
+
+    fn pushIsLast(d: *Dumper, is_last: bool) void {
+        d.is_last.resize(d.ctx.allocator, d.is_last.bit_length + 1, is_last) catch
+            @panic("OOM");
+    }
+
+    fn popIsLast(d: *Dumper) void {
+        d.is_last.resize(d.ctx.allocator, d.is_last.bit_length - 1, false) catch unreachable;
+    }
+
+    pub fn enter(d: *Dumper, item: Ast.Node) void {
+        const hd = Ast.getNodeHead(item);
+        const is_last = hd.flags.contains(.last_child);
+        if (d.is_last.bit_length == 0) {
+            d.emit(item);
+            d.pushIsLast(is_last);
             return;
         }
 
-        for (d.is_last_stack.items[1..]) |is_last| {
-            if (is_last) {
-                d.writer.print("   ", .{}) catch unreachable;
-            } else {
-                d.writer.print("|  ", .{}) catch unreachable;
-            }
+        for (1..d.is_last.bit_length) |i| {
+            const prefix = if (d.is_last.isSet(i)) done_child_str else more_child_str;
+            d.bind(d.writer.writeAll(prefix));
         }
 
-        const is_last = d.isLastSibling(n.handle);
-        if (d.is_last_stack.items.len > 0) {
-            if (is_last) {
-                d.writer.print("\\- ", .{}) catch unreachable;
-            } else {
-                d.writer.print("|- ", .{}) catch unreachable;
-            }
-        }
+        const prefix = if (is_last) last_child_str else some_child_str;
+        d.bind(d.writer.writeAll(prefix));
 
-        d.printNode(n);
-
-        d.parent_stack.append(d.allocator, n.handle) catch unreachable;
-        d.is_last_stack.append(d.allocator, is_last) catch unreachable;
+        d.emit(item);
+        d.pushIsLast(is_last);
     }
 
-    fn exit(d: *Dumper, _: node.Access(Node)) void {
-        _ = d.parent_stack.pop();
-        _ = d.is_last_stack.pop();
+    pub fn exit(d: *Dumper, _: Ast.Node) void {
+        d.popIsLast();
+        if (d.is_last.bit_length == 0) {
+            // This means we are exiting the root node, flush the output
+            // buffer.
+            d.bind(d.writer.flush());
+        }
     }
 };
 
 pub fn format(_ast: Ast, w: *std.Io.Writer) std.Io.Writer.Error!void {
     var ast = _ast;
-    var dumper = Dumper{ .ast = &ast, .allocator = ast.ctx.allocator, .writer = w };
+    var dumper = Ast.Dumper.init(ast.ctx, w);
     defer dumper.deinit();
-    ast.walk(&dumper) catch return error.WriteFailed;
-    // Assert that the ast was not modified when dumping
-    std.debug.assert(std.mem.eql(u8, std.mem.asBytes(&ast), std.mem.asBytes(&_ast)));
+    Ast.walk(&dumper, &ast.root.?);
+    if (dumper.err) |e| {
+        return e;
+    }
 }
