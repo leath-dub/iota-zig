@@ -366,7 +366,7 @@ pub const Dumper = struct {
                 d.emitAuxData(name, "{t}", data_ref.*, count);
                 return true;
             },
-            .@"pointer" => |ptr| switch (ptr.size) {
+            .pointer => |ptr| switch (ptr.size) {
                 .one => return d.handleAuxData(name, @TypeOf(data_ref.*.*), data_ref, count),
                 else => {},
             },

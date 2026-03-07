@@ -82,14 +82,6 @@ pub fn exitFunType(b: *ScopeBuilder, fun_type: *node.FunType) void {
     b.pop(fun_type.scope.?);
 }
 
-pub fn enterCaseStmt(b: *ScopeBuilder, case_stmt: *node.CaseStmt) void {
-    case_stmt.scope = b.push();
-}
-
-pub fn exitCaseStmt(b: *ScopeBuilder, case_stmt: *node.CaseStmt) void {
-    b.pop(case_stmt.scope.?);
-}
-
 pub fn enterIfStmt(b: *ScopeBuilder, if_stmt: *node.IfStmt) void {
     if_stmt.scope = b.push();
 }
@@ -104,6 +96,14 @@ pub fn enterWhileStmt(b: *ScopeBuilder, while_stmt: *node.WhileStmt) void {
 
 pub fn exitWhileStmt(b: *ScopeBuilder, while_stmt: *node.WhileStmt) void {
     b.pop(while_stmt.scope.?);
+}
+
+pub fn enterCaseArm(b: *ScopeBuilder, arm: *node.CaseArm) void {
+    arm.scope = b.push();
+}
+
+pub fn exitCaseArm(b: *ScopeBuilder, arm: *node.CaseArm) void {
+    b.pop(arm.scope.?);
 }
 
 // -- Attach symbols to scopes --

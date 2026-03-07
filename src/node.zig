@@ -213,13 +213,13 @@ pub const CaseStmt = struct {
     head: Head = .{},
     arg: Expr = .dirty,
     arms: []CaseArm = &.{},
-    scope: ?*Scope = null,
 };
 
 pub const CaseArm = struct {
     head: Head = .{},
     patt: CasePatt = .dirty,
     action: Stmt = .dirty,
+    scope: ?*Scope = null,
 };
 
 pub const CasePatt = union(enum) {
