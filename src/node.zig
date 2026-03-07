@@ -6,20 +6,11 @@ const Code = @import("Code.zig");
 // TODO: Ast walking will be done using metaprogramming
 // We pass pointers down to fill memory in sum routines (e.g. parse_decl)
 
-pub const Flag = enum {
-    dirty,
-    last_child,
-};
-
-pub const Head = struct {
-    flags: std.EnumSet(Flag) = .initEmpty(),
-    position: Code.Offset = 0,
-};
-
 pub const SourceFile = struct {
     head: Head = .{},
     imports: []Import = &.{},
     decls: []Decl = &.{},
+    scope: ?*Scope = null, // Available after name resolution
 };
 
 pub const Decl = union(enum) {
@@ -49,6 +40,7 @@ pub const FunDecl = struct {
     is_local: bool = false,
     return_type: ?Type = null,
     body: CompStmt = .{},
+    scope: ?*Scope = null,
 };
 
 pub const FunParam = struct {
@@ -92,11 +84,13 @@ pub const CollType = struct {
 pub const TupleType = struct {
     head: Head = .{},
     types: []Type = &.{},
+    scope: ?*Scope = null,
 };
 
 pub const SumType = struct {
     head: Head = .{},
     alts: []TypeOrInlineDecl = &.{},
+    scope: ?*Scope = null,
 };
 
 pub const TypeOrInlineDecl = union(enum) {
@@ -108,6 +102,7 @@ pub const TypeOrInlineDecl = union(enum) {
 pub const StructType = struct {
     head: Head = .{},
     fields: []StructField = &.{},
+    scope: ?*Scope = null,
 };
 
 pub const StructField = struct {
@@ -119,7 +114,13 @@ pub const StructField = struct {
 
 pub const EnumType = struct {
     head: Head = .{},
-    alts: []Ident = &.{},
+    alts: []Enumerator = &.{},
+    scope: ?*Scope = null,
+};
+
+pub const Enumerator = struct {
+    head: Head = .{},
+    name: Ident = .{},
 };
 
 pub const PtrType = struct {
@@ -137,11 +138,16 @@ pub const FunType = struct {
     is_local: bool = false,
     params: []FunParam = &.{},
     return_type: ?*Type = null,
+    scope: ?*Scope = null,
 };
 
 pub const Ident = struct {
     head: Head = .{},
     token: Token = .{},
+
+    pub fn text(id: Ident) []const u8 {
+        return id.token.span;
+    }
 };
 
 pub const ScopedIdent = struct {
@@ -173,6 +179,7 @@ pub const IfStmt = struct {
     cond: Cond = .dirty,
     then_arm: CompStmt = .{},
     else_arm: ?Else = null,
+    scope: ?*Scope = null, // used for SumTypeReduce
 };
 
 pub const Else = union(enum) {
@@ -185,6 +192,7 @@ pub const WhileStmt = struct {
     head: Head = .{},
     cond: Cond = .dirty,
     body: CompStmt = .{},
+    scope: ?*Scope = null, // used for SumTypeReduce
 };
 
 pub const Cond = union(enum) {
@@ -205,6 +213,7 @@ pub const CaseStmt = struct {
     head: Head = .{},
     arg: Expr = .dirty,
     arms: []CaseArm = &.{},
+    scope: ?*Scope = null,
 };
 
 pub const CaseArm = struct {
@@ -241,6 +250,7 @@ pub const DeferStmt = struct {
 pub const CompStmt = struct {
     head: Head = .{},
     stmts: []Stmt = &.{},
+    scope: ?*Scope = null,
 };
 
 pub const Expr = union(enum) {
@@ -327,4 +337,74 @@ pub const FieldAccessExpr = struct {
     head: Head = .{},
     value: *Expr = undefined,
     field: Ident = .{},
+};
+
+pub const Flag = enum {
+    dirty,
+    last_child,
+};
+
+pub const Symbol = union(enum) {
+    var_decl: *VarDecl,
+    fun_decl: *FunDecl,
+    fun_param: *FunParam,
+    type_decl: *TypeDecl,
+    enumerator: *Enumerator,
+    case_binding: *CaseBinding,
+    struct_field: *StructField,
+    sum_type_reduce: *SumTypeReduce,
+
+    pub fn head(sym: Symbol) *Head {
+        return switch (sym) {
+            inline else => |foo| &foo.head,
+        };
+    }
+
+    pub fn fieldNameFromType(comptime T: type) ?[]const u8 {
+        inline for (std.meta.fields(Symbol)) |field| {
+            if (field.type == T) {
+                return field.name;
+            }
+        }
+    }
+};
+
+pub const Scope = struct {
+    parent: ?*Scope = null,
+    // TODO(shadowing)
+    entries: std.StringHashMapUnmanaged(Symbol) = .empty,
+
+    pub fn insert(s: *Scope, allocator: std.mem.Allocator, symbol: anytype) ?Symbol {
+        const field = comptime Symbol.fieldNameFromType(@TypeOf(symbol)).?;
+        const result = s.entries.getOrPut(allocator, symbol.name.text()) catch @panic("OOM");
+        if (result.found_existing) {
+            return result.value_ptr.*;
+        }
+        result.value_ptr.* = @unionInit(Symbol, field, symbol);
+        return null;
+    }
+
+    pub fn deinit(s: *Scope, allocator: std.mem.Allocator) void {
+        s.entries.deinit(allocator);
+    }
+
+    pub fn format(s: Scope, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try w.writeByte('[');
+        var it = s.entries.iterator();
+        var first = true;
+        while (it.next()) |entry| {
+            if (!first) {
+                try w.writeAll(", ");
+            } else first = false;
+            try w.writeAll(entry.key_ptr.*);
+        }
+        try w.writeByte(']');
+    }
+
+    pub const dont_walk = true;
+};
+
+pub const Head = struct {
+    flags: std.EnumSet(Flag) = .initEmpty(),
+    position: Code.Offset = 0,
 };

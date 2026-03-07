@@ -11,17 +11,32 @@ const Ast = @This();
 
 ctx: *GeneralContext,
 root: ?node.SourceFile = null,
-node_alloc: std.heap.ArenaAllocator,
+arena: std.heap.ArenaAllocator,
+// Scope entry maps are heap allocated without an arena (to prevent wasted memory).
+// Because of this we store a list of scopes to deinit along with the Ast.
+// We use a SegmentedList here so we can back it by our 'arena' without wasting
+// memory.
+scope_list: std.SegmentedList(*node.Scope, 1024) = .{},
 
 pub fn init(ctx: *GeneralContext) Ast {
     return .{
         .ctx = ctx,
-        .node_alloc = ctx.createLifetime(),
+        .arena = ctx.createLifetime(),
     };
 }
 
 pub fn deinit(ast: *Ast) void {
-    ast.node_alloc.deinit();
+    var it = ast.scope_list.iterator(0);
+    while (it.next()) |scope| {
+        scope.*.deinit(ast.ctx.allocator);
+    }
+    ast.arena.deinit();
+}
+
+pub fn allocScope(ast: *Ast) *node.Scope {
+    const new_scope = ast.box(node.Scope{});
+    ast.scope_list.append(ast.arena.allocator(), new_scope) catch @panic("OOM");
+    return new_scope;
 }
 
 // Allocate value on the heap
@@ -29,7 +44,7 @@ pub fn box(ast: *Ast, value: anytype) *@TypeOf(value) {
     if (@typeInfo(@TypeOf(value)) == .pointer) {
         @compileError("Can only box value types");
     }
-    const ptr = ast.node_alloc
+    const ptr = ast.arena
         .allocator()
         .create(@TypeOf(value)) catch @panic("OOM");
     ptr.* = value;
@@ -37,7 +52,7 @@ pub fn box(ast: *Ast, value: anytype) *@TypeOf(value) {
 }
 
 pub fn own(ast: *Ast, comptime T: type, items: []T) []T {
-    return ast.node_alloc.allocator().dupe(T, items) catch @panic("OOM");
+    return ast.arena.allocator().dupe(T, items) catch @panic("OOM");
 }
 
 fn unqualTypeName(comptime T: type) []const u8 {
@@ -99,7 +114,7 @@ fn handleChild(ctx: anytype, ref: anytype, handle: anytype) void {
 }
 
 fn forEachChild(comptime Item: type, item: *Item, ctx: anytype, handle: anytype) void {
-    if (@typeInfo(Item) != .@"struct" or Item == Token) {
+    if (@typeInfo(Item) != .@"struct" or @hasDecl(Item, "dont_walk")) {
         return;
     }
     inline for (meta.fields(Item)) |field| {
@@ -138,7 +153,7 @@ pub fn walk(listener: anytype, item: anytype) void {
 
 fn getChild(ref: anytype) ?Ast.Node {
     const N = @TypeOf(ref.*);
-    if (N == Token) {
+    if (@typeInfo(N) == .@"struct" and @hasDecl(N, "dont_walk")) {
         return null;
     }
     return switch (@typeInfo(N)) {
@@ -152,10 +167,7 @@ fn getChild(ref: anytype) ?Ast.Node {
             .slice => if (ref.len > 0) getChild(&ref.*[ref.len - 1]) else null,
             else => null,
         },
-        .optional => if (ref.* != null)
-            getChild(&ref.*.?)
-        else
-            null,
+        .optional => if (ref.*) |*val| getChild(val) else null,
         else => null,
     };
 }
@@ -353,6 +365,10 @@ pub const Dumper = struct {
             .@"enum" => {
                 d.emitAuxData(name, "{t}", data_ref.*, count);
                 return true;
+            },
+            .@"pointer" => |ptr| switch (ptr.size) {
+                .one => return d.handleAuxData(name, @TypeOf(data_ref.*.*), data_ref, count),
+                else => {},
             },
             // TODO: .array => ???,
             // TODO: .@"union" => ???,

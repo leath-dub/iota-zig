@@ -208,16 +208,18 @@ pub const Token = struct {
     span: []const u8 = "<unitialized token>",
     lit: ?Lit = null,
 
-    pub fn offset(t: Token, code: Code) usize {
+    pub fn offset(t: Token, code: *Code) usize {
         return @as(usize, @as(usize, @intFromPtr(t.span.ptr) - @intFromPtr(code.text.ptr)));
     }
-    pub fn after(t: Token, code: Code) usize {
+    pub fn after(t: Token, code: *Code) usize {
         return t.offset(code) + t.span.len;
     }
 
     pub fn format(t: Token, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.print("{s}", .{t.span});
     }
+
+    pub const dont_walk = true;
 };
 
 pub fn describeTokenType(tt: TokenType) []const u8 {
@@ -231,14 +233,14 @@ pub fn describeTokenType(tt: TokenType) []const u8 {
 }
 
 ctx: *GeneralContext,
-code: Code,
+code: *Code,
 arena: *heap.ArenaAllocator,
 cache: ?Token = null,
 cursor: usize = 0,
 
 const Lexer = @This();
 
-pub fn init(ctx: *GeneralContext, arena: *heap.ArenaAllocator, code: Code) Lexer {
+pub fn init(ctx: *GeneralContext, arena: *heap.ArenaAllocator, code: *Code) Lexer {
     var l: Lexer = .{
         .ctx = ctx,
         .code = code,
@@ -895,7 +897,8 @@ const LexerTest = struct {
     }
 
     pub fn expectIntLit(t: *LexerTest, text: []const u8, value: u64, suffix: ?u8) !void {
-        var lexer = Lexer.init(&t.gc, &t.syntax, try .init(&t.syntax, "<test input>", text));
+        var code = try Code.init(&t.syntax, "<test input>", text);
+        var lexer = Lexer.init(&t.gc, &t.syntax, &code);
         const tok = lexer.peek();
         try std.testing.expectEqual(.int_lit, tok.type);
         try std.testing.expect(tok.lit != null);
@@ -909,7 +912,8 @@ const LexerTest = struct {
     }
 
     pub fn expectFloatLit(t: *LexerTest, text: []const u8, float_lit: FloatLit) !void {
-        var lexer = Lexer.init(&t.gc, &t.syntax, try .init(&t.syntax, "<test input>", text));
+        var code = try Code.init(&t.syntax, "<test input>", text);
+        var lexer = Lexer.init(&t.gc, &t.syntax, &code);
         const tok = lexer.peek();
         try std.testing.expectEqual(.float_lit, tok.type);
         try std.testing.expect(tok.lit != null);
@@ -918,7 +922,8 @@ const LexerTest = struct {
     }
 
     pub fn expectCharLit(t: *LexerTest, text: []const u8, char_lit: CharLit) !void {
-        var lexer = Lexer.init(&t.gc, &t.syntax, try .init(&t.syntax, "<test input>", text));
+        var code = try Code.init(&t.syntax, "<test input>", text);
+        var lexer = Lexer.init(&t.gc, &t.syntax, &code);
         const tok = lexer.peek();
         try std.testing.expectEqual(.char_lit, tok.type);
         try std.testing.expect(tok.lit != null);
@@ -927,7 +932,8 @@ const LexerTest = struct {
     }
 
     pub fn expectStringLit(t: *LexerTest, text: []const u8) !void {
-        var lexer = Lexer.init(&t.gc, &t.syntax, try .init(&t.syntax, "<test input>", text));
+        var code = try Code.init(&t.syntax, "<test input>", text);
+        var lexer = Lexer.init(&t.gc, &t.syntax, &code);
         const tok = lexer.peek();
         try std.testing.expectEqual(.string_lit, tok.type);
         try std.testing.expect(tok.lit == null);
@@ -935,7 +941,8 @@ const LexerTest = struct {
     }
 
     pub fn expectTokenTypes(t: *LexerTest, text: []const u8, types: []const TokenType) !void {
-        var lexer = Lexer.init(&t.gc, &t.syntax, try .init(&t.syntax, "<test input>", text));
+        var code = try Code.init(&t.syntax, "<test input>", text);
+        var lexer = Lexer.init(&t.gc, &t.syntax, &code);
         for (types) |ty| {
             try std.testing.expectEqual(ty, lexer.peek().type);
             lexer.consume();

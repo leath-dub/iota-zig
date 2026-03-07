@@ -9,6 +9,7 @@ const heap = std.heap;
 path: []const u8,
 text: []const u8,
 lines: []usize,
+errors: u32 = 0,
 
 const Self = @This();
 
@@ -67,16 +68,32 @@ pub fn lineAndColumn(code: Self, at: Offset) std.meta.Tuple(&.{ usize, usize }) 
         if (code.lineHasOffset(middle, at)) {
             return .{ middle, at - code.lines[middle] };
         }
-        if (at < code.lines[middle]) {
-            high = middle;
-        }
-        if (at > code.lines[middle + 1]) {
+        if (at > code.lines[middle]) {
             low = middle + 1;
+        } else {
+            high = middle - 1;
         }
     }
 
     std.log.err("offset: {d} in text (length = {d})", .{ at, code.text.len });
     @panic("offset out of range");
+}
+
+pub const Target = struct {
+    at: Offset,
+    code: Self,
+
+    pub fn format(t: Target, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        const line, const column = t.code.lineAndColumn(t.at);
+        try w.print("{s}:{d}:{d}", .{ t.code.path, line + 1, column + 1 });
+    }
+};
+
+pub fn target(code: Self, at: Offset) Target {
+    return .{
+        .at = at,
+        .code = code,
+    };
 }
 
 pub fn lineText(code: Self, line: usize) []const u8 {
@@ -89,7 +106,8 @@ pub fn lineText(code: Self, line: usize) []const u8 {
     return code.text[start..end];
 }
 
-pub fn raise(code: Self, w: *Io.Writer, at: Offset, comptime fmt: []const u8, args: anytype) !void {
+pub fn raise(code: *Self, w: *Io.Writer, at: Offset, comptime fmt: []const u8, args: anytype) !void {
+    code.errors += 1;
     const line, const column = code.lineAndColumn(at);
     try w.print("[{s}:{d}:{d}] ", .{ code.path, line + 1, column + 1 });
     try w.print(fmt ++ "\n", args);
@@ -131,6 +149,14 @@ test "lineAndColumn" {
         \\ fkldjslk
         \\ ----!
     );
+    try testCase(&arena, 4, 0,
+        \\ line one
+        \\ kldjslk
+        \\ fofosj klfjdslk
+        \\ fofosj klfjdslk
+        \\!xfofosj
+        \\ fofosj klfjdslk
+    );
     try testCase(&arena, 0, 0, "!");
     try testCase(&arena, 0, 1, " !");
 
@@ -143,5 +169,17 @@ test "lineAndColumn" {
         \\         try std.testing.expectEqual(column, res.@"1");
         \\     }
         \\ }.testCase;
+    );
+
+    try testCase(&arena, 5, 0,
+        \\import "foo";
+        \\import "foo";
+        \\
+        \\type Foo = u32;
+        \\
+        \\!et x: fun(x: ::This::is::cool, foo: u32) -> s32;
+        \\let y: fun();
+        \\
+        \\var foo: unit = x + 10 + 10 + (10);
     );
 }

@@ -11,6 +11,9 @@ const Parser = @import("Parser.zig");
 const node = @import("node.zig");
 const GeneralContext = @import("GeneralContext.zig");
 
+// Semantic passes
+const ScopeBuilder = @import("ScopeBuilder.zig");
+
 const Cli = struct {
     input_path: []const u8,
 };
@@ -57,12 +60,25 @@ pub fn main() !void {
     defer cst.deinit();
 
     const text = try input_file.readToEndAlloc(ctx.allocator, std.math.maxInt(usize));
-    const code = try Code.init(&cst, cli.input_path, try cst.allocator().dupe(u8, text));
+    var code = try Code.init(&cst, cli.input_path, try cst.allocator().dupe(u8, text));
     ctx.allocator.free(text);
 
-    var parser = Parser.init(&ctx, Lexer.init(&ctx, &cst, code));
+    var parser = Parser.init(&ctx, Lexer.init(&ctx, &cst, &code));
     var ast = parser.parse();
     defer ast.deinit();
 
+    if (code.errors != 0) {
+        std.debug.print("{f}", .{ast});
+        return error.SyntaxAnalysisFailed;
+    }
+
+    var scope_builder = ScopeBuilder.init(&ast, &code);
+    defer scope_builder.deinit();
+    Ast.walk(&scope_builder, &ast.root.?);
+
     std.debug.print("{f}", .{ast});
+
+    if (code.errors != 0) {
+        return error.SemanticAnalysisFailed;
+    }
 }

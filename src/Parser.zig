@@ -421,9 +421,15 @@ fn parseEnumType(p: *Parser) node.EnumType {
     var enum_type = p.create(node.EnumType);
     if (!p.skipIf(.@"enum")) return err(enum_type);
     if (!p.skipIf(.lbrace)) return err(enum_type);
-    enum_type.alts = p.oneOrMoreCsv(node.Ident, parseIdent, .rbrace);
+    enum_type.alts = p.oneOrMoreCsv(node.Enumerator, parseEnumerator, .rbrace);
     if (!p.skipIf(.rbrace)) return err(enum_type);
     return ok(enum_type);
+}
+
+fn parseEnumerator(p: *Parser) node.Enumerator {
+    var enumerator = p.create(node.Enumerator);
+    enumerator.name = p.parseIdent();
+    return ok(enumerator);
 }
 
 fn createBuiltinType(p: *Parser) node.BuiltinType {
@@ -757,7 +763,6 @@ fn parseScopedIdent(p: *Parser) node.ScopedIdent {
     var first: ?node.Ident = null;
     if (p.on(.scope)) {
         first = p.emptyIdent();
-        _ = p.next();
     }
     scoped_ident.idents = p.oneOrMoreDelimWithFirst(node.Ident, first, parseIdent, .scope, null);
     return ok(scoped_ident);
