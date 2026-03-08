@@ -33,6 +33,50 @@ pub fn enterSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
 
 pub fn exitSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
     b.pop(&source_file.scope.?);
+
+    // Resolve function declarations
+    const FunDeclResolver = struct {
+        ctx: *GeneralContext,
+        code: *Code,
+
+        pub fn enterFunDecl(fr: *@This(), fun_decl: *node.FunDecl) void {
+            var target_scope = fun_decl.scope.?.parent.?;
+
+            if (fun_decl.type) |type_name| {
+                if (target_scope.get(type_name.text())) |ent| {
+                    target_scope = switch (ent) {
+                        .type_decl => |td| &td.scope.?,
+                        else => {
+                            fr.code.raise(
+                                fr.ctx.error_out,
+                                type_name.head.position,
+                                "{s} does not resolve to a type",
+                                .{
+                                    type_name.text(),
+                                },
+                            ) catch unreachable;
+                            return;
+                        },
+                    };
+                }
+            }
+
+            if (target_scope.insert(fr.ctx.allocator, fun_decl)) |existing| {
+                fr.code.raise(
+                    fr.ctx.error_out,
+                    fun_decl.name.head.position,
+                    "{s} redeclared in this block; other declaration at {f}",
+                    .{
+                        fun_decl.name.text(),
+                        fr.code.target(existing.head().position),
+                    },
+                ) catch unreachable;
+            }
+        }
+    };
+    
+    var fr: FunDeclResolver = .{ .ctx = b.ctx(), .code = b.code };
+    Ast.walk(&fr, source_file);
 }
 
 pub fn enterSumType(b: *ScopeBuilder, sum_type: *node.SumType) void {
@@ -52,7 +96,6 @@ pub fn exitStructType(b: *ScopeBuilder, struct_type: *node.StructType) void {
 }
 
 pub fn enterFunDecl(b: *ScopeBuilder, fun_decl: *node.FunDecl) void {
-    // TODO handle scoped ident: b.insert(fun_decl);
     b.push(&fun_decl.scope);
     b.pushLabelScope(&fun_decl.label_scope);
 }
@@ -110,11 +153,16 @@ pub fn exitCaseArm(b: *ScopeBuilder, arm: *node.CaseArm) void {
     b.pop(&arm.scope.?);
 }
 
-// -- Attach symbols to scopes --
-
 pub fn enterTypeDecl(b: *ScopeBuilder, type_decl: *node.TypeDecl) void {
     b.insert(type_decl);
+    b.push(&type_decl.scope);
 }
+
+pub fn exitTypeDecl(b: *ScopeBuilder, type_decl: *node.TypeDecl) void {
+    b.pop(&type_decl.scope.?);
+}
+
+// -- Attach symbols to scopes --
 
 pub fn enterVarDecl(b: *ScopeBuilder, var_decl: *node.VarDecl) void {
     b.insert(var_decl);
@@ -145,7 +193,7 @@ pub fn enterLabelledStmt(b: *ScopeBuilder, stmt: *node.LabelledStmt) void {
 }
 
 fn push(b: *ScopeBuilder, ref: *?node.Scope) void {
-    ref.* = .{};
+    ref.* = .{ .parent = b.topOrNull() };
     b.ast.registerSymbolMap(.{ .scope = &ref.*.? });
     b.scopes.append(b.arena.allocator(), &ref.*.?) catch @panic("OOM");
 }
@@ -168,6 +216,13 @@ fn popLabelScope(b: *ScopeBuilder, scope: *node.LabelScope) void {
 
 fn top(b: *ScopeBuilder) *node.Scope {
     return b.scopes.at(b.scopes.len - 1).*;
+}
+
+fn topOrNull(b: *ScopeBuilder) ?*node.Scope {
+    if (b.scopes.len == 0) {
+        return null;
+    }
+    return b.top();
 }
 
 fn topLabelScope(b: *ScopeBuilder) *node.LabelScope {

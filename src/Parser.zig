@@ -71,7 +71,14 @@ fn parseDecl(p: *Parser) node.Decl {
 fn parseFunDecl(p: *Parser) node.FunDecl {
     var fun = p.create(node.FunDecl);
     if (!p.skipIf(.fun)) return err(fun);
-    fun.name = p.parseScopedIdent();
+    const first = p.parseIdent();
+    if (p.on(.scope)) {
+        _ = p.next();
+        fun.type = first;
+        fun.name = p.parseIdent();
+    } else {
+        fun.name = first;
+    }
     if (!p.skipIf(.lparen)) return err(fun);
     fun.params = p.zeroOrMoreDelim(node.FunParam, parseFunParam, .comma, .rparen);
     if (!p.skipIf(.rparen)) return err(fun);

@@ -35,7 +35,8 @@ pub const VarDecl = struct {
 
 pub const FunDecl = struct {
     head: Head = .{},
-    name: ScopedIdent = .{},
+    type: ?Ident = null,
+    name: Ident = .{},
     params: []FunParam = &.{},
     is_local: bool = false,
     return_type: ?Type = null,
@@ -55,6 +56,7 @@ pub const TypeDecl = struct {
     head: Head = .{},
     name: Ident = .{},
     type: Type = .dirty,
+    scope: ?Scope = null,
 };
 
 pub const Type = union(enum) {
@@ -396,6 +398,10 @@ pub const Scope = struct {
         }
         result.value_ptr.* = @unionInit(Symbol, field, symbol);
         return null;
+    }
+
+    pub inline fn get(s: *Scope, name: []const u8) ?Symbol {
+        return s.entries.get(name);
     }
 
     pub fn deinit(s: *Scope, allocator: std.mem.Allocator) void {
