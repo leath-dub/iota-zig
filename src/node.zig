@@ -165,7 +165,21 @@ pub const Stmt = union(enum) {
     comp: CompStmt,
     expr: Expr,
     assign: Assign,
+    labelled: LabelledStmt,
+    branch: BranchStmt,
     dirty,
+};
+
+pub const LabelledStmt = struct {
+    head: Head = .{},
+    label: Ident = .{},
+    stmt: *Stmt = undefined,
+};
+
+pub const BranchStmt = struct {
+    head: Head = .{},
+    action: Token = .{},
+    label: ?Ident = .{},
 };
 
 pub const Assign = struct {

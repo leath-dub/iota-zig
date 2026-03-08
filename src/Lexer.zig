@@ -96,6 +96,8 @@ const token_descriptors = [_]TokenDescriptor{
     TokenDescriptor.initKeyword(.@"for"),
     TokenDescriptor.initKeyword(.@"defer"),
     TokenDescriptor.initKeyword(.goto),
+    TokenDescriptor.initKeyword(.@"continue"),
+    TokenDescriptor.initKeyword(.@"break"),
     TokenDescriptor.initKeyword(.let),
     TokenDescriptor.initKeyword(.@"var"),
     TokenDescriptor.initKeyword(.def),

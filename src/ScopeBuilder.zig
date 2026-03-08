@@ -51,6 +51,7 @@ pub fn exitStructType(b: *ScopeBuilder, struct_type: *node.StructType) void {
 }
 
 pub fn enterFunDecl(b: *ScopeBuilder, fun_decl: *node.FunDecl) void {
+    // TODO handle scoped ident: b.insert(fun_decl);
     fun_decl.scope = b.push();
 }
 
@@ -153,14 +154,13 @@ fn top(b: *ScopeBuilder) *node.Scope {
 
 fn insert(b: *ScopeBuilder, symbol: anytype) void {
     if (b.top().insert(b.ctx().allocator, symbol)) |existing| {
-        const prev = b.code.target(existing.head().position);
         b.code.raise(
             b.ctx().error_out,
             symbol.name.head.position,
-            "error: definition for '{s}' shadows previous defintion at: {f}",
+            "{s} redeclared in this block; other declaration at {f}",
             .{
                 symbol.name.text(),
-                prev,
+                b.code.target(existing.head().position),
             },
         ) catch unreachable;
     }

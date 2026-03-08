@@ -110,8 +110,31 @@ fn parseStmt(p: *Parser) node.Stmt {
         .@"while" => .{ .@"while" = p.parseWhileStmt() },
         .case => .{ .case = p.parseCaseStmt() },
         .@"defer" => .{ .@"defer" = p.parseDeferStmt() },
+        .ident =>
+            if (p.onLabel())
+                .{ .labelled = p.parseLabelledStmt() }
+            else p.parseAssignOrExpr(),
+        .goto, .@"continue", .@"break" => .{ .branch = p.createBranchStmt() },
         else => p.parseAssignOrExpr(),
     };
+}
+
+fn createBranchStmt(p: *Parser) node.BranchStmt {
+    var branch = p.create(node.BranchStmt);
+    branch.action = p.munch();
+    if (!p.on(.semicolon)) {
+        branch.label = p.parseIdent();
+    }
+    if (!p.skipIf(.semicolon)) return err(branch);
+    return ok(branch);
+}
+
+fn parseLabelledStmt(p: *Parser) node.LabelledStmt {
+    var stmt = p.create(node.LabelledStmt);
+    stmt.label = p.parseIdent();
+    if (!p.skipIf(.colon)) return err(stmt);
+    stmt.stmt = p.ast.box(p.parseStmt());
+    return ok(stmt);
 }
 
 fn parseDeferStmt(p: *Parser) node.DeferStmt {
@@ -783,7 +806,7 @@ fn createTokenExpr(p: *Parser) node.TokenExpr {
 }
 
 fn raiseExpect(p: *Parser, expected: []const u8) void {
-    p.lexer.code.raise(p.ctx.error_out, p.lexer.cursor, "error: expected {s}, got {s}", .{ expected, Lexer.describeTokenType(p.lexer.peek().type) }) catch unreachable;
+    p.lexer.code.raise(p.ctx.error_out, p.lexer.cursor, "expected {s}, got {s}", .{ expected, Lexer.describeTokenType(p.lexer.peek().type) }) catch unreachable;
 }
 
 fn tokenTypes(comptime tts: anytype) [meta.fields(@TypeOf(tts)).len]TokenType {

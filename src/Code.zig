@@ -109,7 +109,7 @@ pub fn lineText(code: Self, line: usize) []const u8 {
 pub fn raise(code: *Self, w: *Io.Writer, at: Offset, comptime fmt: []const u8, args: anytype) !void {
     code.errors += 1;
     const line, const column = code.lineAndColumn(at);
-    try w.print("[{s}:{d}:{d}] ", .{ code.path, line + 1, column + 1 });
+    try w.print("{s}:{d}:{d}: ", .{ code.path, line + 1, column + 1 });
     try w.print(fmt ++ "\n", args);
     try w.print("{s}\n", .{code.lineText(line)});
     for (0..column) |_| {
