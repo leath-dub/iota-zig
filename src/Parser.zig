@@ -110,10 +110,10 @@ fn parseStmt(p: *Parser) node.Stmt {
         .@"while" => .{ .@"while" = p.parseWhileStmt() },
         .case => .{ .case = p.parseCaseStmt() },
         .@"defer" => .{ .@"defer" = p.parseDeferStmt() },
-        .ident =>
-            if (p.onLabel())
-                .{ .labelled = p.parseLabelledStmt() }
-            else p.parseAssignOrExpr(),
+        .ident => if (p.onLabel())
+            .{ .labelled = p.parseLabelledStmt() }
+        else
+            p.parseAssignOrExpr(),
         .goto, .@"continue", .@"break" => .{ .branch = p.createBranchStmt() },
         else => p.parseAssignOrExpr(),
     };
@@ -131,7 +131,7 @@ fn createBranchStmt(p: *Parser) node.BranchStmt {
 
 fn parseLabelledStmt(p: *Parser) node.LabelledStmt {
     var stmt = p.create(node.LabelledStmt);
-    stmt.label = p.parseIdent();
+    stmt.name = p.parseIdent();
     if (!p.skipIf(.colon)) return err(stmt);
     stmt.stmt = p.ast.box(p.parseStmt());
     return ok(stmt);

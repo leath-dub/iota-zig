@@ -9,6 +9,11 @@ const mem = std.mem;
 
 const Ast = @This();
 
+const SymbolMap = union(enum) {
+    scope: *node.Scope,
+    label_scope: *node.LabelScope,
+};
+
 ctx: *GeneralContext,
 root: ?node.SourceFile = null,
 arena: std.heap.ArenaAllocator,
@@ -16,7 +21,7 @@ arena: std.heap.ArenaAllocator,
 // Because of this we store a list of scopes to deinit along with the Ast.
 // We use a SegmentedList here so we can back it by our 'arena' without wasting
 // memory.
-scope_list: std.SegmentedList(*node.Scope, 1024) = .{},
+symbol_maps: std.SegmentedList(SymbolMap, 1024) = .{},
 
 pub fn init(ctx: *GeneralContext) Ast {
     return .{
@@ -26,17 +31,17 @@ pub fn init(ctx: *GeneralContext) Ast {
 }
 
 pub fn deinit(ast: *Ast) void {
-    var it = ast.scope_list.iterator(0);
-    while (it.next()) |scope| {
-        scope.*.deinit(ast.ctx.allocator);
+    var it = ast.symbol_maps.iterator(0);
+    while (it.next()) |map| {
+        switch (map.*) {
+            inline else => |m| m.deinit(ast.ctx.allocator),
+        }
     }
     ast.arena.deinit();
 }
 
-pub fn allocScope(ast: *Ast) *node.Scope {
-    const new_scope = ast.box(node.Scope{});
-    ast.scope_list.append(ast.arena.allocator(), new_scope) catch @panic("OOM");
-    return new_scope;
+pub fn registerSymbolMap(ast: *Ast, map: SymbolMap) void {
+    ast.symbol_maps.append(ast.arena.allocator(), map) catch @panic("OOM");
 }
 
 // Allocate value on the heap

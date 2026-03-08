@@ -11,6 +11,7 @@ ast: *Ast,
 code: *Code,
 arena: std.heap.ArenaAllocator,
 scopes: std.SegmentedList(*node.Scope, 128) = .{},
+label_scopes: std.SegmentedList(*node.LabelScope, 128) = .{},
 
 pub fn init(ast: *Ast, code: *Code) ScopeBuilder {
     return .{
@@ -27,84 +28,86 @@ pub fn deinit(b: *ScopeBuilder) void {
 // -- Manage scopes --
 
 pub fn enterSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
-    source_file.scope = b.push();
+    b.push(&source_file.scope);
 }
 
 pub fn exitSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
-    b.pop(source_file.scope.?);
+    b.pop(&source_file.scope.?);
 }
 
 pub fn enterSumType(b: *ScopeBuilder, sum_type: *node.SumType) void {
-    sum_type.scope = b.push();
+    b.push(&sum_type.scope);
 }
 
 pub fn exitSumType(b: *ScopeBuilder, sum_type: *node.SumType) void {
-    b.pop(sum_type.scope.?);
+    b.pop(&sum_type.scope.?);
 }
 
 pub fn enterStructType(b: *ScopeBuilder, struct_type: *node.StructType) void {
-    struct_type.scope = b.push();
+    b.push(&struct_type.scope);
 }
 
 pub fn exitStructType(b: *ScopeBuilder, struct_type: *node.StructType) void {
-    b.pop(struct_type.scope.?);
+    b.pop(&struct_type.scope.?);
 }
 
 pub fn enterFunDecl(b: *ScopeBuilder, fun_decl: *node.FunDecl) void {
     // TODO handle scoped ident: b.insert(fun_decl);
-    fun_decl.scope = b.push();
+    b.push(&fun_decl.scope);
+    b.pushLabelScope(&fun_decl.label_scope);
 }
 
 pub fn exitFunDecl(b: *ScopeBuilder, fun_decl: *node.FunDecl) void {
-    b.pop(fun_decl.scope.?);
+    b.pop(&fun_decl.scope.?);
+    b.popLabelScope(&fun_decl.label_scope.?);
 }
 
 pub fn enterCompStmt(b: *ScopeBuilder, comp_stmt: *node.CompStmt) void {
-    comp_stmt.scope = b.push();
+    b.push(&comp_stmt.scope);
 }
 
 pub fn exitCompStmt(b: *ScopeBuilder, comp_stmt: *node.CompStmt) void {
-    b.pop(comp_stmt.scope.?);
+    b.pop(&comp_stmt.scope.?);
 }
 
 pub fn enterEnumType(b: *ScopeBuilder, enum_type: *node.EnumType) void {
-    enum_type.scope = b.push();
+    b.push(&enum_type.scope);
 }
 
 pub fn exitEnumType(b: *ScopeBuilder, enum_type: *node.EnumType) void {
-    b.pop(enum_type.scope.?);
+    b.pop(&enum_type.scope.?);
 }
 
 pub fn enterFunType(b: *ScopeBuilder, fun_type: *node.FunType) void {
-    fun_type.scope = b.push();
+    b.push(&fun_type.scope);
 }
 
 pub fn exitFunType(b: *ScopeBuilder, fun_type: *node.FunType) void {
-    b.pop(fun_type.scope.?);
+    b.pop(&fun_type.scope.?);
 }
 
 pub fn enterIfStmt(b: *ScopeBuilder, if_stmt: *node.IfStmt) void {
-    if_stmt.scope = b.push();
+    b.push(&if_stmt.scope);
 }
 
 pub fn exitIfStmt(b: *ScopeBuilder, if_stmt: *node.IfStmt) void {
-    b.pop(if_stmt.scope.?);
+    b.pop(&if_stmt.scope.?);
 }
 
 pub fn enterWhileStmt(b: *ScopeBuilder, while_stmt: *node.WhileStmt) void {
-    while_stmt.scope = b.push();
+    b.push(&while_stmt.scope);
 }
 
 pub fn exitWhileStmt(b: *ScopeBuilder, while_stmt: *node.WhileStmt) void {
-    b.pop(while_stmt.scope.?);
+    b.pop(&while_stmt.scope.?);
 }
 
 pub fn enterCaseArm(b: *ScopeBuilder, arm: *node.CaseArm) void {
-    arm.scope = b.push();
+    b.push(&arm.scope);
 }
 
 pub fn exitCaseArm(b: *ScopeBuilder, arm: *node.CaseArm) void {
-    b.pop(arm.scope.?);
+    b.pop(&arm.scope.?);
 }
 
 // -- Attach symbols to scopes --
@@ -137,10 +140,14 @@ pub fn enterSumTypeReduce(b: *ScopeBuilder, reduce: *node.SumTypeReduce) void {
     b.insert(reduce);
 }
 
-fn push(b: *ScopeBuilder) *node.Scope {
-    const scope = b.ast.allocScope();
-    b.scopes.append(b.arena.allocator(), scope) catch @panic("OOM");
-    return scope;
+pub fn enterLabelledStmt(b: *ScopeBuilder, stmt: *node.LabelledStmt) void {
+    b.insertLabel(stmt);
+}
+
+fn push(b: *ScopeBuilder, ref: *?node.Scope) void {
+    ref.* = .{};
+    b.ast.registerSymbolMap(.{ .scope = &ref.*.? });
+    b.scopes.append(b.arena.allocator(), &ref.*.?) catch @panic("OOM");
 }
 
 fn pop(b: *ScopeBuilder, scope: *node.Scope) void {
@@ -148,8 +155,23 @@ fn pop(b: *ScopeBuilder, scope: *node.Scope) void {
     std.debug.assert(result != null and result.? == scope);
 }
 
+fn pushLabelScope(b: *ScopeBuilder, ref: *?node.LabelScope) void {
+    ref.* = .{};
+    b.ast.registerSymbolMap(.{ .label_scope = &ref.*.? });
+    b.label_scopes.append(b.arena.allocator(), &ref.*.?) catch @panic("OOM");
+}
+
+fn popLabelScope(b: *ScopeBuilder, scope: *node.LabelScope) void {
+    const result = b.label_scopes.pop();
+    std.debug.assert(result != null and result.? == scope);
+}
+
 fn top(b: *ScopeBuilder) *node.Scope {
     return b.scopes.at(b.scopes.len - 1).*;
+}
+
+fn topLabelScope(b: *ScopeBuilder) *node.LabelScope {
+    return b.label_scopes.at(b.label_scopes.len - 1).*;
 }
 
 fn insert(b: *ScopeBuilder, symbol: anytype) void {
@@ -161,6 +183,20 @@ fn insert(b: *ScopeBuilder, symbol: anytype) void {
             .{
                 symbol.name.text(),
                 b.code.target(existing.head().position),
+            },
+        ) catch unreachable;
+    }
+}
+
+fn insertLabel(b: *ScopeBuilder, symbol: *node.LabelledStmt) void {
+    if (b.topLabelScope().insert(b.ctx().allocator, symbol)) |existing| {
+        b.code.raise(
+            b.ctx().error_out,
+            symbol.name.head.position,
+            "{s} redeclared in this block; other declaration at {f}",
+            .{
+                symbol.name.text(),
+                b.code.target(existing.head.position),
             },
         ) catch unreachable;
     }

@@ -10,7 +10,7 @@ pub const SourceFile = struct {
     head: Head = .{},
     imports: []Import = &.{},
     decls: []Decl = &.{},
-    scope: ?*Scope = null, // Available after name resolution
+    scope: ?Scope = null, // Available after name resolution
 };
 
 pub const Decl = union(enum) {
@@ -40,7 +40,8 @@ pub const FunDecl = struct {
     is_local: bool = false,
     return_type: ?Type = null,
     body: CompStmt = .{},
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
+    label_scope: ?LabelScope = null,
 };
 
 pub const FunParam = struct {
@@ -84,13 +85,13 @@ pub const CollType = struct {
 pub const TupleType = struct {
     head: Head = .{},
     types: []Type = &.{},
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
 };
 
 pub const SumType = struct {
     head: Head = .{},
     alts: []TypeOrInlineDecl = &.{},
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
 };
 
 pub const TypeOrInlineDecl = union(enum) {
@@ -102,7 +103,7 @@ pub const TypeOrInlineDecl = union(enum) {
 pub const StructType = struct {
     head: Head = .{},
     fields: []StructField = &.{},
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
 };
 
 pub const StructField = struct {
@@ -115,7 +116,7 @@ pub const StructField = struct {
 pub const EnumType = struct {
     head: Head = .{},
     alts: []Enumerator = &.{},
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
 };
 
 pub const Enumerator = struct {
@@ -138,7 +139,7 @@ pub const FunType = struct {
     is_local: bool = false,
     params: []FunParam = &.{},
     return_type: ?*Type = null,
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
 };
 
 pub const Ident = struct {
@@ -172,14 +173,14 @@ pub const Stmt = union(enum) {
 
 pub const LabelledStmt = struct {
     head: Head = .{},
-    label: Ident = .{},
+    name: Ident = .{},
     stmt: *Stmt = undefined,
 };
 
 pub const BranchStmt = struct {
     head: Head = .{},
     action: Token = .{},
-    label: ?Ident = .{},
+    label: ?Ident = null,
 };
 
 pub const Assign = struct {
@@ -193,7 +194,7 @@ pub const IfStmt = struct {
     cond: Cond = .dirty,
     then_arm: CompStmt = .{},
     else_arm: ?Else = null,
-    scope: ?*Scope = null, // used for SumTypeReduce
+    scope: ?Scope = null, // used for SumTypeReduce
 };
 
 pub const Else = union(enum) {
@@ -206,7 +207,7 @@ pub const WhileStmt = struct {
     head: Head = .{},
     cond: Cond = .dirty,
     body: CompStmt = .{},
-    scope: ?*Scope = null, // used for SumTypeReduce
+    scope: ?Scope = null, // used for SumTypeReduce
 };
 
 pub const Cond = union(enum) {
@@ -233,7 +234,7 @@ pub const CaseArm = struct {
     head: Head = .{},
     patt: CasePatt = .dirty,
     action: Stmt = .dirty,
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
 };
 
 pub const CasePatt = union(enum) {
@@ -264,7 +265,7 @@ pub const DeferStmt = struct {
 pub const CompStmt = struct {
     head: Head = .{},
     stmts: []Stmt = &.{},
-    scope: ?*Scope = null,
+    scope: ?Scope = null,
 };
 
 pub const Expr = union(enum) {
@@ -385,7 +386,6 @@ pub const Symbol = union(enum) {
 
 pub const Scope = struct {
     parent: ?*Scope = null,
-    // TODO(shadowing)
     entries: std.StringHashMapUnmanaged(Symbol) = .empty,
 
     pub fn insert(s: *Scope, allocator: std.mem.Allocator, symbol: anytype) ?Symbol {
@@ -403,6 +403,38 @@ pub const Scope = struct {
     }
 
     pub fn format(s: Scope, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try w.writeByte('[');
+        var it = s.entries.iterator();
+        var first = true;
+        while (it.next()) |entry| {
+            if (!first) {
+                try w.writeAll(", ");
+            } else first = false;
+            try w.writeAll(entry.key_ptr.*);
+        }
+        try w.writeByte(']');
+    }
+
+    pub const dont_walk = true;
+};
+
+pub const LabelScope = struct {
+    entries: std.StringHashMapUnmanaged(*LabelledStmt) = .empty,
+
+    pub fn insert(s: *LabelScope, allocator: std.mem.Allocator, symbol: *LabelledStmt) ?*LabelledStmt {
+        const result = s.entries.getOrPut(allocator, symbol.name.text()) catch @panic("OOM");
+        if (result.found_existing) {
+            return result.value_ptr.*;
+        }
+        result.value_ptr.* = symbol;
+        return null;
+    }
+
+    pub fn deinit(s: *LabelScope, allocator: std.mem.Allocator) void {
+        s.entries.deinit(allocator);
+    }
+
+    pub fn format(s: LabelScope, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.writeByte('[');
         var it = s.entries.iterator();
         var first = true;
