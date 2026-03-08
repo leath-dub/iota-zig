@@ -13,6 +13,7 @@ const GeneralContext = @import("GeneralContext.zig");
 
 // Semantic passes
 const ScopeBuilder = @import("ScopeBuilder.zig");
+const IdentResolver = @import("IdentResolver.zig");
 
 const Cli = struct {
     input_path: []const u8,
@@ -73,12 +74,22 @@ pub fn main() !void {
     }
 
     var scope_builder = ScopeBuilder.init(&ast, &code);
-    defer scope_builder.deinit();
     Ast.walk(&scope_builder, &ast.root.?);
-
-    std.debug.print("{f}", .{ast});
+    scope_builder.deinit();
 
     if (code.errors != 0) {
+        std.debug.print("{f}", .{ast});
         return error.SemanticAnalysisFailed;
     }
+
+    var ident_resolver = IdentResolver.init(&ast, &code);
+    Ast.walk(&ident_resolver, &ast.root.?);
+    ident_resolver.deinit();
+
+    if (code.errors != 0) {
+        std.debug.print("{f}", .{ast});
+        return error.SemanticAnalysisFailed;
+    }
+
+    std.debug.print("{f}", .{ast});
 }

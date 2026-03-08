@@ -34,14 +34,16 @@ pub fn enterSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
 pub fn exitSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
     b.pop(&source_file.scope.?);
 
-    // Resolve function declarations
+    // Resolve function declarations.
+    // Since function declarations can be attached to types, we need to
+    // resolve them after everthing else in a separate pass.
     const FunDeclResolver = struct {
         ctx: *GeneralContext,
         code: *Code,
+        global_scope: *node.Scope,
 
         pub fn enterFunDecl(fr: *@This(), fun_decl: *node.FunDecl) void {
             var target_scope = fun_decl.scope.?.parent.?;
-
             if (fun_decl.type) |type_name| {
                 if (target_scope.get(type_name.text())) |ent| {
                     target_scope = switch (ent) {
@@ -61,6 +63,42 @@ pub fn exitSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
                 }
             }
 
+            if (std.mem.endsWith(u8, fun_decl.name.text(), "\'")) {
+                fr.code.raise(
+                    fr.ctx.error_out,
+                    fun_decl.name.head.position,
+                    "invalid name for function: {s}",
+                    .{fun_decl.name.text()},
+                ) catch unreachable;
+            }
+
+            // Disallow exported Foo_bar if exported Foo::bar exists
+            const us_opt = std.mem.indexOf(u8, fun_decl.name.text(), "__");
+            if (!fun_decl.is_local and us_opt != null) {
+                const us = us_opt.?;
+                const potential_type = fun_decl.name.text()[0..us];
+                const method = fun_decl.name.text()[us + 2 ..];
+                if (target_scope == fr.global_scope) {
+                    if (fr.global_scope.get(potential_type)) |ent| {
+                        switch (ent) {
+                            .type_decl => |td| if (td.scope.?.get(method)) |res| if (res == .fun_decl and !res.fun_decl.is_local) {
+                                fr.code.raise(
+                                    fr.ctx.error_out,
+                                    fun_decl.name.head.position,
+                                    "non-local {s} conflicts with defintion {s}::{s}",
+                                    .{
+                                        fun_decl.name.text(),
+                                        potential_type,
+                                        method,
+                                    },
+                                ) catch unreachable;
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            }
+
             if (target_scope.insert(fr.ctx.allocator, fun_decl)) |existing| {
                 fr.code.raise(
                     fr.ctx.error_out,
@@ -74,8 +112,12 @@ pub fn exitSourceFile(b: *ScopeBuilder, source_file: *node.SourceFile) void {
             }
         }
     };
-    
-    var fr: FunDeclResolver = .{ .ctx = b.ctx(), .code = b.code };
+
+    var fr: FunDeclResolver = .{
+        .ctx = b.ctx(),
+        .code = b.code,
+        .global_scope = &source_file.scope.?,
+    };
     Ast.walk(&fr, source_file);
 }
 

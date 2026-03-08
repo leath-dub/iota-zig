@@ -4,6 +4,7 @@ const Code = @import("Code.zig");
 const node = @import("node.zig");
 const GeneralContext = @import("GeneralContext.zig");
 const Token = @import("Lexer.zig").Token;
+const common = @import("common.zig");
 const meta = std.meta;
 const mem = std.mem;
 
@@ -60,17 +61,9 @@ pub fn own(ast: *Ast, comptime T: type, items: []T) []T {
     return ast.arena.allocator().dupe(T, items) catch @panic("OOM");
 }
 
-fn unqualTypeName(comptime T: type) []const u8 {
-    const qualName = @typeName(T);
-    if (mem.lastIndexOfScalar(u8, qualName, '.')) |index| {
-        return qualName[index + 1 ..];
-    }
-    return qualName;
-}
-
 fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: type, item: *Item, listener: *Listener) ChildDisposition {
     var result: ChildDisposition = .walk;
-    const callback_name = name ++ comptime unqualTypeName(Item);
+    const callback_name = name ++ comptime common.unqualTypeName(Item);
     if (comptime meta.hasMethod(Listener, callback_name)) {
         const Args = meta.ArgsTuple(@TypeOf(@field(Listener, callback_name)));
         if (@FieldType(Args, "0") != *Listener or
@@ -158,7 +151,7 @@ pub fn walk(listener: anytype, item: anytype) void {
 
 fn getChild(ref: anytype) ?Ast.Node {
     const N = @TypeOf(ref.*);
-    if (@typeInfo(N) == .@"struct" and @hasDecl(N, "dont_walk")) {
+    if ((@typeInfo(N) == .@"struct" or @typeInfo(N) == .@"union") and @hasDecl(N, "dont_walk")) {
         return null;
     }
     return switch (@typeInfo(N)) {
@@ -352,7 +345,7 @@ pub const Dumper = struct {
             return false;
         }
         switch (@typeInfo(T)) {
-            .@"struct" => if (meta.hasMethod(T, "format")) {
+            .@"union", .@"struct" => if (meta.hasMethod(T, "format")) {
                 d.emitAuxData(name, "{f}", data_ref.*, count);
                 return true;
             },

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Token = @import("Lexer.zig").Token;
 const Code = @import("Code.zig");
+const common = @import("common.zig");
 
 // TODO: Ast walking will be done using metaprogramming
 // We pass pointers down to fill memory in sum routines (e.g. parse_decl)
@@ -156,6 +157,23 @@ pub const Ident = struct {
 pub const ScopedIdent = struct {
     head: Head = .{},
     idents: []Ident = &.{},
+    resolves_to: ?Symbol = null,
+
+    pub fn isPartial(si: ScopedIdent) bool {
+        return si.idents[0].token.type == .empty;
+    }
+
+    pub fn format(
+        si: ScopedIdent,
+        w: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        for (si.idents, 0..) |id, i| {
+            if (i != 0) {
+                try w.writeAll("::");
+            }
+            try w.print("{s}", .{id.text()});
+        }
+    }
 };
 
 pub const Stmt = union(enum) {
@@ -384,6 +402,19 @@ pub const Symbol = union(enum) {
             }
         }
     }
+
+    pub fn format(
+        s: Symbol,
+        w: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        switch (s) {
+            inline else => |value| {
+                try w.print("{s}", .{common.unqualTypeName(@TypeOf(value.*))});
+            }
+        }
+    }
+
+    pub const dont_walk = true;
 };
 
 pub const Scope = struct {
