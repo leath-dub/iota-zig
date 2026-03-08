@@ -81,7 +81,8 @@ fn resolveLocal(ir: *IdentResolver, scope: *node.Scope, id: *node.Ident) ?node.S
     if (ir.current_var_decl != null and
         item != null and
         item.? == .var_decl and
-        item.?.var_decl == ir.current_var_decl.?) {
+        item.?.var_decl == ir.current_var_decl.?)
+    {
         return null;
     }
     return item;
@@ -118,13 +119,11 @@ fn resolveScoped(ir: *IdentResolver, si: *node.ScopedIdent) ?node.Symbol {
         }
         symbol_opt = if (scope_opt) |scope|
             ir.resolveLocal(scope, id)
-        else ir.resolve(id);
+        else
+            ir.resolve(id);
     }
     if (symbol_opt == null) {
-        ir.code.raise(
-            ir.ctx().error_out,
-            si.head.position,
-            "undefined: {f}", .{ si } ) catch unreachable;
+        ir.code.raise(ir.ctx().error_out, si.head.position, "undefined: {f}", .{si}) catch unreachable;
         return null;
     }
     si.resolves_to = symbol_opt;

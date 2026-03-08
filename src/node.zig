@@ -410,7 +410,7 @@ pub const Symbol = union(enum) {
         switch (s) {
             inline else => |value| {
                 try w.print("{s}", .{common.unqualTypeName(@TypeOf(value.*))});
-            }
+            },
         }
     }
 
