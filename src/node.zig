@@ -18,7 +18,7 @@ pub const SourceFile = struct {
 };
 
 pub const Decl = union(enum) {
-    @"def": DefDecl,
+    def: DefDecl,
     @"var": VarDecl,
     fun: FunDecl,
     type: TypeDecl,

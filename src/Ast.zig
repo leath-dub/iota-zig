@@ -40,14 +40,14 @@ pub fn deinit(ast: *Ast) void {
                     if (@hasField(T, "label_scope")) {
                         value.label_scope.deinit(sc.ctx.allocator);
                     }
-                }
+                },
             }
         }
     };
 
     var scope_cleaner: ScopeCleaner = .{ .ctx = ast.ctx };
     walk(&scope_cleaner, &ast.root.?);
-    
+
     ast.arena.deinit();
 }
 
