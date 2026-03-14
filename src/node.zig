@@ -4,17 +4,21 @@ const Token = @import("Lexer.zig").Token;
 const Code = @import("Code.zig");
 const common = @import("common.zig");
 
-// TODO: Ast walking will be done using metaprogramming
-// We pass pointers down to fill memory in sum routines (e.g. parse_decl)
+// TODO:
+// pub const Module = struct {
+//     scope: Scope = .{},
+//     source_files: []SourceFile = &.{},
+// };
 
 pub const SourceFile = struct {
     head: Head = .{},
     imports: []Import = &.{},
     decls: []Decl = &.{},
-    scope: ?Scope = null, // Available after name resolution
+    scope: Scope = .{}, // Available after name resolution
 };
 
 pub const Decl = union(enum) {
+    @"def": DefDecl,
     @"var": VarDecl,
     fun: FunDecl,
     type: TypeDecl,
@@ -34,16 +38,24 @@ pub const VarDecl = struct {
     init_expr: ?Expr = null,
 };
 
+pub const DefDecl = struct {
+    head: Head = .{},
+    type_name: ?Ident = null,
+    name: Ident = .{},
+    type: ?Type = null,
+    init_expr: Expr = .dirty,
+};
+
 pub const FunDecl = struct {
     head: Head = .{},
-    type: ?Ident = null,
+    type_name: ?Ident = null,
     name: Ident = .{},
     params: []FunParam = &.{},
     is_local: bool = false,
     return_type: ?Type = null,
     body: CompStmt = .{},
-    scope: ?Scope = null,
-    label_scope: ?LabelScope = null,
+    scope: Scope = .{},
+    label_scope: LabelScope = .{},
 };
 
 pub const FunParam = struct {
@@ -57,7 +69,7 @@ pub const TypeDecl = struct {
     head: Head = .{},
     name: Ident = .{},
     type: Type = .dirty,
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const Type = union(enum) {
@@ -88,13 +100,13 @@ pub const CollType = struct {
 pub const TupleType = struct {
     head: Head = .{},
     types: []Type = &.{},
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const SumType = struct {
     head: Head = .{},
     alts: []TypeOrInlineDecl = &.{},
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const TypeOrInlineDecl = union(enum) {
@@ -106,7 +118,7 @@ pub const TypeOrInlineDecl = union(enum) {
 pub const StructType = struct {
     head: Head = .{},
     fields: []StructField = &.{},
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const StructField = struct {
@@ -119,7 +131,7 @@ pub const StructField = struct {
 pub const EnumType = struct {
     head: Head = .{},
     alts: []Enumerator = &.{},
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const Enumerator = struct {
@@ -142,7 +154,7 @@ pub const FunType = struct {
     is_local: bool = false,
     params: []FunParam = &.{},
     return_type: ?*Type = null,
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const Ident = struct {
@@ -159,7 +171,7 @@ pub const ScopedIdent = struct {
     idents: []Ident = &.{},
     resolves_to: ?Symbol = null,
 
-    pub fn isPartial(si: ScopedIdent) bool {
+    pub fn isGlobal(si: ScopedIdent) bool {
         return si.idents[0].token.type == .empty;
     }
 
@@ -171,7 +183,9 @@ pub const ScopedIdent = struct {
             if (i != 0) {
                 try w.writeAll("::");
             }
-            try w.print("{s}", .{id.text()});
+            if (id.token.type != .empty) {
+                try w.print("{s}", .{id.text()});
+            }
         }
     }
 };
@@ -214,7 +228,7 @@ pub const IfStmt = struct {
     cond: Cond = .dirty,
     then_arm: CompStmt = .{},
     else_arm: ?Else = null,
-    scope: ?Scope = null, // used for SumTypeReduce
+    scope: Scope = .{}, // used for SumTypeReduce
 };
 
 pub const Else = union(enum) {
@@ -227,7 +241,7 @@ pub const WhileStmt = struct {
     head: Head = .{},
     cond: Cond = .dirty,
     body: CompStmt = .{},
-    scope: ?Scope = null, // used for SumTypeReduce
+    scope: Scope = .{}, // used for SumTypeReduce
 };
 
 pub const Cond = union(enum) {
@@ -254,7 +268,7 @@ pub const CaseArm = struct {
     head: Head = .{},
     patt: CasePatt = .dirty,
     action: Stmt = .dirty,
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const CasePatt = union(enum) {
@@ -285,7 +299,7 @@ pub const DeferStmt = struct {
 pub const CompStmt = struct {
     head: Head = .{},
     stmts: []Stmt = &.{},
-    scope: ?Scope = null,
+    scope: Scope = .{},
 };
 
 pub const Expr = union(enum) {
@@ -377,9 +391,11 @@ pub const FieldAccessExpr = struct {
 pub const Flag = enum {
     dirty,
     last_child,
+    resolving,
 };
 
 pub const Symbol = union(enum) {
+    def_decl: *DefDecl,
     var_decl: *VarDecl,
     fun_decl: *FunDecl,
     fun_param: *FunParam,

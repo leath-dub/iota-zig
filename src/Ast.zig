@@ -18,11 +18,6 @@ const SymbolMap = union(enum) {
 ctx: *GeneralContext,
 root: ?node.SourceFile = null,
 arena: std.heap.ArenaAllocator,
-// Scope entry maps are heap allocated without an arena (to prevent wasted memory).
-// Because of this we store a list of scopes to deinit along with the Ast.
-// We use a SegmentedList here so we can back it by our 'arena' without wasting
-// memory.
-symbol_maps: std.SegmentedList(SymbolMap, 1024) = .{},
 
 pub fn init(ctx: *GeneralContext) Ast {
     return .{
@@ -32,17 +27,28 @@ pub fn init(ctx: *GeneralContext) Ast {
 }
 
 pub fn deinit(ast: *Ast) void {
-    var it = ast.symbol_maps.iterator(0);
-    while (it.next()) |map| {
-        switch (map.*) {
-            inline else => |m| m.deinit(ast.ctx.allocator),
-        }
-    }
-    ast.arena.deinit();
-}
+    const ScopeCleaner = struct {
+        ctx: *GeneralContext,
 
-pub fn registerSymbolMap(ast: *Ast, map: SymbolMap) void {
-    ast.symbol_maps.append(ast.arena.allocator(), map) catch @panic("OOM");
+        pub fn enter(sc: *@This(), item: Node) void {
+            switch (item) {
+                inline else => |value| {
+                    const T = @TypeOf(value.*);
+                    if (@hasField(T, "scope")) {
+                        value.scope.deinit(sc.ctx.allocator);
+                    }
+                    if (@hasField(T, "label_scope")) {
+                        value.label_scope.deinit(sc.ctx.allocator);
+                    }
+                }
+            }
+        }
+    };
+
+    var scope_cleaner: ScopeCleaner = .{ .ctx = ast.ctx };
+    walk(&scope_cleaner, &ast.root.?);
+    
+    ast.arena.deinit();
 }
 
 // Allocate value on the heap
@@ -63,19 +69,6 @@ pub fn own(ast: *Ast, comptime T: type, items: []T) []T {
 
 fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: type, item: *Item, listener: *Listener) ChildDisposition {
     var result: ChildDisposition = .walk;
-    const callback_name = name ++ comptime common.unqualTypeName(Item);
-    if (comptime meta.hasMethod(Listener, callback_name)) {
-        const Args = meta.ArgsTuple(@TypeOf(@field(Listener, callback_name)));
-        if (@FieldType(Args, "0") != *Listener or
-            @FieldType(Args, "1") != *Item)
-        {
-            @compileError("function named " ++ callback_name ++ " has invalid argument types");
-        }
-        const ret = @field(Listener, callback_name)(listener, item);
-        if (comptime @TypeOf(ret) == ChildDisposition) {
-            result = ret;
-        }
-    }
     const generic_callback_name = name;
     if (comptime isNode(Item) and meta.hasMethod(Listener, generic_callback_name)) {
         const Args = meta.ArgsTuple(@TypeOf(@field(Listener, generic_callback_name)));
@@ -86,6 +79,19 @@ fn callback(comptime name: []const u8, comptime Item: type, comptime Listener: t
         }
         const ret = @field(Listener, generic_callback_name)(listener, @unionInit(Node, @tagName(TypeTag(Item)), item));
         if (@TypeOf(ret) == ChildDisposition and result != .skip) {
+            result = ret;
+        }
+    }
+    const callback_name = name ++ comptime common.unqualTypeName(Item);
+    if (comptime meta.hasMethod(Listener, callback_name)) {
+        const Args = meta.ArgsTuple(@TypeOf(@field(Listener, callback_name)));
+        if (@FieldType(Args, "0") != *Listener or
+            @FieldType(Args, "1") != *Item)
+        {
+            @compileError("function named " ++ callback_name ++ " has invalid argument types");
+        }
+        const ret = @field(Listener, callback_name)(listener, item);
+        if (comptime @TypeOf(ret) == ChildDisposition) {
             result = ret;
         }
     }

@@ -59,7 +59,8 @@ fn parseImport(p: *Parser) node.Import {
 
 fn parseDecl(p: *Parser) node.Decl {
     return again: switch (p.at().type) {
-        .let, .@"var", .def => .{ .@"var" = p.parseVarDecl() },
+        .def => .{ .def = p.parseDefDecl() },
+        .let, .@"var" => .{ .@"var" = p.parseVarDecl() },
         .fun => .{ .fun = p.parseFunDecl() },
         .type => .{ .type = p.parseTypeDecl(true) },
         else => if (p.expectOneOf(.{ .let, .@"var", .def, .fun, .type }, "declaration")) {
@@ -74,7 +75,7 @@ fn parseFunDecl(p: *Parser) node.FunDecl {
     const first = p.parseIdent();
     if (p.on(.scope)) {
         _ = p.next();
-        fun.type = first;
+        fun.type_name = first;
         fun.name = p.parseIdent();
     } else {
         fun.name = first;
@@ -263,6 +264,35 @@ fn parseSumTypeReduce(p: *Parser) node.SumTypeReduce {
     if (!p.skipIf(.equal)) return err(reduce);
     reduce.value = p.parseExpr();
     return ok(reduce);
+}
+
+fn parseDefDecl(p: *Parser) node.DefDecl {
+    var def_decl = p.create(node.DefDecl);
+
+    const start = p.munch();
+    assert(start.type == .def);
+
+    const first = p.parseIdent();
+    if (p.on(.scope)) {
+        _ = p.next();
+        def_decl.type_name = first;
+        def_decl.name = p.parseIdent();
+    } else {
+        def_decl.name = first;
+    }
+
+    if (p.on(.colon)) {
+        _ = p.next();
+        def_decl.type = p.parseType();
+    }
+
+    if (!p.skipIf(.equal)) return err(def_decl);
+
+    def_decl.init_expr = p.parseExpr();
+
+    if (!p.skipIf(.semicolon)) return err(def_decl);
+
+    return ok(def_decl);
 }
 
 fn parseVarDecl(p: *Parser) node.VarDecl {
