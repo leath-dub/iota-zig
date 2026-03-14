@@ -545,6 +545,19 @@ fn parseIdent(p: *Parser) node.Ident {
     return err(ident);
 }
 
+fn parseIdentOrInt(p: *Parser) node.Ident {
+    var id_or_int = p.create(node.Ident);
+    again: switch (p.at().type) {
+        .ident, .int_lit => id_or_int.token = p.munch(),
+        else => if (p.expectOneOf(.{
+            .ident,
+            .int_lit,
+        }, "identifier or integer literal")) {
+            continue :again p.at().type;
+        } else return err(id_or_int),
+    }
+    return ok(id_or_int);
+}
 // TODO: see if pratt parser would improve performance in a meaningful way
 
 // The order here determines the precendance (low to high)
@@ -640,7 +653,7 @@ fn parsePostfixGroup(p: *Parser) node.Expr {
         .lbracket => return .{ .coll_access = p.parseCollAccessExpr(left) },
         .inc, .dec, .bang, .qmark => return .{ .postfix = p.createPostfixExpr(left) },
         .lparen => return .{ .call = p.parseCallExpr(left) },
-        .dot => return .{ .field_access = p.parseFieldAccessExpr(left) },
+        .float_lit, .dot => return .{ .field_access = p.parseFieldAccessExpr(left) },
         else => {},
     }
     return left;
@@ -648,9 +661,23 @@ fn parsePostfixGroup(p: *Parser) node.Expr {
 
 fn parseFieldAccessExpr(p: *Parser, left: node.Expr) node.FieldAccessExpr {
     var access = p.create(node.FieldAccessExpr);
-    if (!p.skipIf(.dot)) return err(access);
     access.value = p.ast.box(left);
-    access.field = p.parseIdent();
+    if (p.on(.float_lit)) {
+        const float_lit = p.at().lit.?.float;
+        if (!float_lit.lex_flags.contains(.int) and !float_lit.lex_flags.contains(.exp)) {
+            defer _ = p.next();
+            std.debug.assert(float_lit.lex_flags.contains(.fract));
+            // Extract number span from '.<num>'
+            const num = p.at().span[1..];
+            var id = p.create(node.Ident);
+            // Synthesize identifier token
+            id.token = .{ .type = .ident, .span = num };
+            access.field = ok(id);
+            return ok(access);
+        }
+    }
+    if (!p.skipIf(.dot)) return err(access);
+    access.field = p.parseIdentOrInt();
     return ok(access);
 }
 
@@ -830,7 +857,7 @@ fn parseScopedIdent(p: *Parser) node.ScopedIdent {
     if (p.on(.scope)) {
         first = p.emptyIdent();
     }
-    scoped_ident.idents = p.oneOrMoreDelimWithFirst(node.Ident, first, parseIdent, .scope, null);
+    scoped_ident.idents = p.oneOrMoreDelimWithFirst(node.Ident, first, parseIdentOrInt, .scope, null);
     return ok(scoped_ident);
 }
 

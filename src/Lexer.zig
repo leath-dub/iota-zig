@@ -187,6 +187,7 @@ pub const FloatLit = struct {
     const LexFlag = enum {
         int,
         fract,
+        exp,
     };
     int: u64 = 0,
     fract: u64 = 0,
@@ -683,6 +684,8 @@ fn lexHexFloat(l: *Lexer) LexError!Token {
         float_lit.exp = .{ .unsigned = exp.value };
     }
 
+    float_lit.lex_flags.insert(.exp);
+
     return l.tokenLit(.float_lit, offset, .{ .float = float_lit });
 }
 
@@ -749,6 +752,8 @@ fn lexDecimalFloat(l: *Lexer) LexError!Token {
         } else {
             float_lit.exp = .{ .unsigned = exp.value };
         }
+
+        float_lit.lex_flags.insert(.exp);
     } else {
         // We only allow no exponent if '.' was specified. This is to
         // disambiguite between integer literal and float literal.
@@ -977,18 +982,18 @@ test "floating point lexing" {
     try t.expectFloatLit("0.", float(0, 0, 1, .{.int}));
     try t.expectFloatLit("072.40", float(72, 40, 1, .{ .int, .fract }));
     try t.expectFloatLit("2.71828", float(2, 71828, 1, .{ .int, .fract }));
-    try t.expectFloatLit("1.e+0", float(1, 0, 0, .{.int}));
-    try t.expectFloatLit("6.67428e-11", float(6, 67428, -11, .{ .int, .fract }));
-    try t.expectFloatLit("1e6", float(1, 0, 6, .{.int}));
+    try t.expectFloatLit("1.e+0", float(1, 0, 0, .{ .int, .exp }));
+    try t.expectFloatLit("6.67428e-11", float(6, 67428, -11, .{ .int, .fract, .exp }));
+    try t.expectFloatLit("1e6", float(1, 0, 6, .{ .int, .exp }));
     try t.expectFloatLit(".25", float(0, 25, 1, .{.fract}));
-    try t.expectFloatLit(".12345e+5", float(0, 12345, 5, .{.fract}));
+    try t.expectFloatLit(".12345e+5", float(0, 12345, 5, .{ .fract, .exp }));
     try t.expectFloatLit("1_5.", float(15, 0, 1, .{.int}));
-    try t.expectFloatLit("0.15e+0_2", float(0, 15, 2, .{ .int, .fract }));
-    try t.expectFloatLit("0x1p-2", float(1, 0, -2, .{.int}));
-    try t.expectFloatLit("0x2.p10", float(2, 0, 10, .{.int}));
-    try t.expectFloatLit("0x1.Fp+0", float(1, 0xF, 0, .{ .int, .fract }));
-    try t.expectFloatLit("0x.8p-1", float(0, 8, -1, .{.fract}));
-    try t.expectFloatLit("0x_1FFFp-16", float(0x1FFF, 0, -16, .{.int}));
+    try t.expectFloatLit("0.15e+0_2", float(0, 15, 2, .{ .int, .fract, .exp }));
+    try t.expectFloatLit("0x1p-2", float(1, 0, -2, .{ .int, .exp }));
+    try t.expectFloatLit("0x2.p10", float(2, 0, 10, .{ .int, .exp }));
+    try t.expectFloatLit("0x1.Fp+0", float(1, 0xF, 0, .{ .int, .fract, .exp }));
+    try t.expectFloatLit("0x.8p-1", float(0, 8, -1, .{ .fract, .exp }));
+    try t.expectFloatLit("0x_1FFFp-16", float(0x1FFF, 0, -16, .{ .int, .exp }));
 
     // Negative test cases
     try t.expectTokenTypes("0x15e-2", &.{ .int_lit, .minus, .int_lit });

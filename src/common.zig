@@ -48,6 +48,7 @@ pub fn resolveScoped(base: *node.Scope, sid: *node.ScopedIdent, comptime resolve
                     // Next check in local sub-scope
                     if (symbol_opt == null) {
                         const fallback_scope = switch (td.type) {
+                            .tuple => |*tup| &tup.scope,
                             .sum => |*sum| &sum.scope,
                             .@"enum" => |*en| &en.scope,
                             .scoped_ident => |*sub| blk: {
