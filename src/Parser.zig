@@ -160,7 +160,7 @@ fn parseAssignOrExpr(p: *Parser) node.Stmt {
         _ = p.next();
         assign.rvalue = p.parseExpr();
         if (!p.skipIf(.semicolon)) return .{ .assign = err(assign) };
-        return .{ .assign = assign };
+        return .{ .assign = ok(assign) };
     }
     if (!p.skipIf(.semicolon)) return .{ .expr = .dirty };
     return .{ .expr = left };
