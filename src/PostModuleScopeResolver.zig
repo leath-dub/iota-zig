@@ -173,6 +173,19 @@ pub fn exitSumType(pr: *PostModuleScopeResolver, sum_type: *node.SumType) void {
     pr.pop(&sum_type.scope);
 }
 
+pub fn enterTupleType(pr: *PostModuleScopeResolver, tuple_type: *node.TupleType) void {
+    pr.push(&tuple_type.scope);
+}
+
+pub fn exitTupleType(pr: *PostModuleScopeResolver, tuple_type: *node.TupleType) void {
+    const scope = pr.top();
+    for (tuple_type.types, 0..) |*ty, index| {
+        const indexName = common.indexName(&common.index_name_buf, index);
+        std.debug.assert(scope.insertName(pr.ctx().allocator, indexName, ty) == null);
+    }
+    pr.pop(&tuple_type.scope);
+}
+
 pub fn enterStructType(pr: *PostModuleScopeResolver, struct_type: *node.StructType) void {
     pr.push(&struct_type.scope);
 }

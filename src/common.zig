@@ -73,3 +73,9 @@ pub fn resolveScoped(base: *node.Scope, sid: *node.ScopedIdent, comptime resolve
 
     return symbol_opt;
 }
+
+pub var index_name_buf: [4096]u8 = undefined;
+
+pub fn indexName(buf: []u8, index: usize) []const u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{index}) catch @panic("format error");
+}

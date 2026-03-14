@@ -444,7 +444,7 @@ fn parseTupleOrSumType(p: *Parser) node.Type {
     }
     const first = p.parseType();
     return again: switch (p.at().type) {
-        .comma, .rparen => .{ .tuple = p.subparseTupleType(first) },
+        .comma, .rparen => .{ .tuple = p.subparseTupleType(ok(node.SubType{ .type = first })) },
         .pipe => .{ .sum = p.subparseSumType(.{ .type = first }) },
         else => if (p.expectOneOf(.{
             .comma,
@@ -456,11 +456,17 @@ fn parseTupleOrSumType(p: *Parser) node.Type {
     };
 }
 
-fn subparseTupleType(p: *Parser, first: ?node.Type) node.TupleType {
+fn subparseTupleType(p: *Parser, first: ?node.SubType) node.TupleType {
     var tuple = p.create(node.TupleType);
-    tuple.types = p.oneOrMoreDelimWithFirst(node.Type, first, parseType, .comma, .rparen);
+    tuple.types = p.oneOrMoreDelimWithFirst(node.SubType, first, parseSubType, .comma, .rparen);
     if (!p.skipIf(.rparen)) return err(tuple);
     return ok(tuple);
+}
+
+fn parseSubType(p: *Parser) node.SubType {
+    var sub_type = p.create(node.SubType);
+    sub_type.type = p.parseType();
+    return ok(sub_type);
 }
 
 fn subparseSumType(p: *Parser, first: ?node.TypeOrInlineDecl) node.SumType {

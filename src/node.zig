@@ -99,8 +99,13 @@ pub const CollType = struct {
 
 pub const TupleType = struct {
     head: Head = .{},
-    types: []Type = &.{},
+    types: []SubType = &.{},
     scope: Scope = .{},
+};
+
+pub const SubType = struct {
+    head: Head = .{},
+    type: Type = .dirty,
 };
 
 pub const SumType = struct {
@@ -401,6 +406,7 @@ pub const Symbol = union(enum) {
     fun_param: *FunParam,
     type_decl: *TypeDecl,
     enumerator: *Enumerator,
+    sub_type: *SubType,
     case_binding: *CaseBinding,
     struct_field: *StructField,
     sum_type_reduce: *SumTypeReduce,
@@ -437,14 +443,18 @@ pub const Scope = struct {
     parent: ?*Scope = null,
     entries: std.StringHashMapUnmanaged(Symbol) = .empty,
 
-    pub fn insert(s: *Scope, allocator: std.mem.Allocator, symbol: anytype) ?Symbol {
+    pub fn insertName(s: *Scope, allocator: std.mem.Allocator, name: []const u8, symbol: anytype) ?Symbol {
         const field = comptime Symbol.fieldNameFromType(@TypeOf(symbol)).?;
-        const result = s.entries.getOrPut(allocator, symbol.name.text()) catch @panic("OOM");
+        const result = s.entries.getOrPut(allocator, name) catch @panic("OOM");
         if (result.found_existing) {
             return result.value_ptr.*;
         }
         result.value_ptr.* = @unionInit(Symbol, field, symbol);
         return null;
+    }
+
+    pub fn insert(s: *Scope, allocator: std.mem.Allocator, symbol: anytype) ?Symbol {
+        return s.insertName(allocator, symbol.name.text(), symbol);
     }
 
     pub inline fn get(s: *Scope, name: []const u8) ?Symbol {
