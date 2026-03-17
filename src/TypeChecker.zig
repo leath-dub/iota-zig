@@ -247,9 +247,9 @@ inline fn raise(tc: *TypeChecker, at: Code.Offset, comptime fmt: []const u8, arg
 fn insert(tc: *TypeChecker, symbol_: anytype) void {
     const position = if (@TypeOf(symbol_) != node.Symbol)
         symbol_.name.head.position
-    else symbol_.head().position;
-    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_)
-        else symbol_;
+    else
+        symbol_.head().position;
+    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_) else symbol_;
     if (tc.top().insert(tc.ctx().allocator, symbol)) |existing| {
         tc.raise(
             position,

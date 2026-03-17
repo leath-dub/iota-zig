@@ -53,9 +53,9 @@ fn ctx(mr: *ModuleScopeResolver) *GeneralContext {
 fn insert(mr: *ModuleScopeResolver, symbol_: anytype) void {
     const position = if (@TypeOf(symbol_) != node.Symbol)
         symbol_.name.head.position
-    else symbol_.head().position;
-    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_)
-        else symbol_;
+    else
+        symbol_.head().position;
+    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_) else symbol_;
     if (mr.global_scope.insert(mr.ctx().allocator, symbol)) |existing| {
         mr.code.raise(
             mr.ctx().error_out,

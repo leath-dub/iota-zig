@@ -295,9 +295,9 @@ fn topLabelScope(pr: *PostModuleScopeResolver) *node.LabelScope {
 fn insert(pr: *PostModuleScopeResolver, symbol_: anytype) void {
     const position = if (@TypeOf(symbol_) != node.Symbol)
         symbol_.name.head.position
-    else symbol_.head().position;
-    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_)
-        else symbol_;
+    else
+        symbol_.head().position;
+    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_) else symbol_;
     if (pr.top().insert(pr.ctx().allocator, symbol)) |existing| {
         pr.raise(
             position,

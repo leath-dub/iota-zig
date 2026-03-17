@@ -851,8 +851,9 @@ fn lexInt(l: *Lexer) LexError!Token {
 fn lexIdent(l: *Lexer) Token {
     const esc = l.code.text[l.cursor] == '`';
     const text = if (esc)
-        l.code.text[l.cursor + 1..]
-    else l.code.text[l.cursor..];
+        l.code.text[l.cursor + 1 ..]
+    else
+        l.code.text[l.cursor..];
 
     var runes = Runes{ .text = text };
     const first = runes.next() catch null orelse return l.illegalToken();

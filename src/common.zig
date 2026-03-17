@@ -78,7 +78,8 @@ pub fn resolveScoped(base: *const node.Scope, sid: *node.ScopedIdent, cfg: Resol
             // Lexical lookup if we don't have a currently resolved symbol
             symbol_opt = if (cfg.lookup_mode == .lexical)
                 resolve(base, id)
-            else resolveLocal(base, id);
+            else
+                resolveLocal(base, id);
         }
     }
 
