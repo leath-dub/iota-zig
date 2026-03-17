@@ -50,14 +50,19 @@ fn ctx(mr: *ModuleScopeResolver) *GeneralContext {
     return mr.ast.ctx;
 }
 
-fn insert(mr: *ModuleScopeResolver, symbol: anytype) void {
+fn insert(mr: *ModuleScopeResolver, symbol_: anytype) void {
+    const position = if (@TypeOf(symbol_) != node.Symbol)
+        symbol_.name.head.position
+    else symbol_.head().position;
+    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_)
+        else symbol_;
     if (mr.global_scope.insert(mr.ctx().allocator, symbol)) |existing| {
         mr.code.raise(
             mr.ctx().error_out,
-            symbol.name.head.position,
+            position,
             "{s} redeclared in this block; other declaration at {f}",
             .{
-                symbol.name.text(),
+                symbol.name,
                 mr.code.target(existing.head().position),
             },
         ) catch unreachable;

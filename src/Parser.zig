@@ -51,7 +51,7 @@ fn notEof(p: *Parser) bool {
 fn parseImport(p: *Parser) node.Import {
     var imp = p.create(node.Import);
     if (!p.skipIf(.import)) return err(imp);
-    if (!p.expect(.string_lit)) return err(imp);
+    if (!p.expect(.str_lit)) return err(imp);
     imp.module = p.munch();
     if (!p.skipIf(.semicolon)) return err(imp);
     return ok(imp);
@@ -354,7 +354,7 @@ fn parseType(p: *Parser) node.Type {
         .f32,
         .f64,
         .bool,
-        .string,
+        .str,
         .unit,
         => .{ .builtin = p.createBuiltinType() },
         .lbracket => .{ .coll = p.parseCollType() },
@@ -377,7 +377,7 @@ fn parseType(p: *Parser) node.Type {
             .f32,
             .f64,
             .bool,
-            .string,
+            .str,
             .unit,
             .lbracket,
             .@"struct",
@@ -737,8 +737,7 @@ fn parseSliceRange(p: *Parser, begin: ?node.Expr) node.SliceRange {
 fn parseAtomExpr(p: *Parser) node.Expr {
     return again: switch (p.at().type) {
         .lparen => p.parseParenOrAnonCallExpr(),
-        .scope, .ident => .{ .scoped_ident = p.parseScopedIdent() },
-        .char_lit, .string_lit, .int_lit, .float_lit, .true, .false => .{ .token_expr = p.createTokenExpr() },
+        .scope, .ident => .{ .ref_expr = p.parseRefExpr() },
         .u8,
         .s8,
         .u16,
@@ -751,14 +750,14 @@ fn parseAtomExpr(p: *Parser) node.Expr {
         .f64,
         .bool,
         .unit,
-        .string,
-        => .{ .builtin_type = p.createBuiltinType() },
+        .str,
+        .char_lit, .str_lit, .int_lit, .float_lit, .true, .false, => .{ .token_expr = p.createTokenExpr() },
         else => if (p.expectOneOf(.{
             .lparen,
             .scope,
             .ident,
             .char_lit,
-            .string_lit,
+            .str_lit,
             .int_lit,
             .float_lit,
             .true,
@@ -774,11 +773,17 @@ fn parseAtomExpr(p: *Parser) node.Expr {
             .f64,
             .bool,
             .unit,
-            .string,
+            .str,
         }, "an atomic expression")) {
             continue :again p.at().type;
         } else .dirty,
     };
+}
+
+fn parseRefExpr(p: *Parser) node.RefExpr {
+    var ref_expr = p.create(node.RefExpr);
+    ref_expr.name = p.parseScopedIdent();
+    return ok(ref_expr);
 }
 
 fn parseParenOrAnonCallExpr(p: *Parser) node.Expr {

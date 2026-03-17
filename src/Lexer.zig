@@ -53,7 +53,6 @@ const token_descriptors = [_]TokenDescriptor{
     TokenDescriptor.init(.plus_equal, "'+='"),
     TokenDescriptor.init(.minus, "'-'"),
     TokenDescriptor.init(.minus_equal, "'-='"),
-    TokenDescriptor.init(.btick, "'`'"),
     TokenDescriptor.init(.star, "'*'"),
     TokenDescriptor.init(.star_equal, "'*='"),
     TokenDescriptor.init(.slash, "'/'"),
@@ -81,7 +80,7 @@ const token_descriptors = [_]TokenDescriptor{
     TokenDescriptor.init(.dec, "'--'"),
     TokenDescriptor.init(.arrow, "'->'"),
     TokenDescriptor.init(.char_lit, "character literal"),
-    TokenDescriptor.init(.string_lit, "string literal"),
+    TokenDescriptor.init(.str_lit, "string literal"),
     TokenDescriptor.init(.int_lit, "integer literal"),
     TokenDescriptor.init(.float_lit, "floating point literal"),
     TokenDescriptor.init(.ident, "identifier"),
@@ -115,7 +114,7 @@ const token_descriptors = [_]TokenDescriptor{
     TokenDescriptor.initKeyword(.f32),
     TokenDescriptor.initKeyword(.f64),
     TokenDescriptor.initKeyword(.@"return"),
-    TokenDescriptor.initKeyword(.string),
+    TokenDescriptor.initKeyword(.str),
     TokenDescriptor.initKeyword(.unit),
     TokenDescriptor.initKeyword(.bool),
     TokenDescriptor.initKeyword(.true),
@@ -359,7 +358,6 @@ pub fn peek(l: *Lexer) Token {
         ';' => l.token(.semicolon, 1),
         '?' => l.token(.qmark, 1),
         ',' => l.token(.comma, 1),
-        '`' => l.token(.btick, 1),
         '&' => l.token(.amper, 1),
         '^' => l.token(.carat, 1),
         '!' => if (l.ahead('=')) l.token(.not_equal, 2) else l.token(.bang, 1),
@@ -393,6 +391,7 @@ pub fn peek(l: *Lexer) Token {
         '\'' => l.lexChar() catch l.token(.invalid, 1),
         '\"' => l.lexString() catch l.token(.invalid, 1),
         '0'...'9' => l.lexFloat() catch l.lexInt() catch l.token(.invalid, 1),
+        '`' => l.lexIdent(),
         else => out: {
             const ident = l.lexIdent();
             const tt_opt = if (std.meta.stringToEnum(Keyword, ident.span)) |kw| switch (kw) {
@@ -511,9 +510,9 @@ fn lexString(l: *Lexer) LexError!Token {
         l.raise(l.cursor, "unmatched \" (double-quote)", .{});
         // Delimit the quote by the end of line and move on
         const line, const column = l.code.lineAndColumn(l.cursor);
-        return l.token(.string_lit, l.code.lineText(line).len - column);
+        return l.token(.str_lit, l.code.lineText(line).len - column);
     }
-    return l.token(.string_lit, offset + 1);
+    return l.token(.str_lit, offset + 1);
 }
 
 const Digits = struct {
@@ -850,10 +849,19 @@ fn lexInt(l: *Lexer) LexError!Token {
 }
 
 fn lexIdent(l: *Lexer) Token {
-    var runes = Runes{ .text = l.code.text[l.cursor..] };
+    const esc = l.code.text[l.cursor] == '`';
+    const text = if (esc)
+        l.code.text[l.cursor + 1..]
+    else l.code.text[l.cursor..];
+
+    var runes = Runes{ .text = text };
     const first = runes.next() catch null orelse return l.illegalToken();
 
-    if (!unicode_utils.isIdentStart(first)) {
+    if (esc and !unicode_utils.isIdentContinue(first)) {
+        return l.illegalToken();
+    }
+
+    if (!esc and !unicode_utils.isIdentStart(first)) {
         return l.illegalToken();
     }
 
@@ -867,7 +875,7 @@ fn lexIdent(l: *Lexer) Token {
         runes.consumed += 1;
     }
 
-    var tok = Token{ .type = .ident, .span = l.code.text[l.cursor..][0 .. runes.consumed - 1] };
+    var tok = Token{ .type = .ident, .span = text[0 .. runes.consumed - 1] };
     // Allow trailing ' in identifier
     const after = tok.after(l.code);
     if (after < l.code.text.len and l.code.text[after] == '\'') {
@@ -942,7 +950,7 @@ const LexerTest = struct {
         var code = try Code.init(&t.syntax, "<test input>", text);
         var lexer = Lexer.init(&t.gc, &t.syntax, &code);
         const tok = lexer.peek();
-        try std.testing.expectEqual(.string_lit, tok.type);
+        try std.testing.expectEqual(.str_lit, tok.type);
         try std.testing.expect(tok.lit == null);
         try std.testing.expectEqualSlices(u8, tok.span, text);
     }

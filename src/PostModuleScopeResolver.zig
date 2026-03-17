@@ -53,13 +53,13 @@ pub fn exitSourceFile(pr: *PostModuleScopeResolver, source_file: *node.SourceFil
                 },
                 else => null,
             }) |symbol| {
-                switch (symbol) {
+                switch (symbol.data) {
                     .type_decl => |sub_decl| {
                         if (sub_decl.head.flags.contains(.resolving)) {
                             cd.pr.raise(sub_decl.head.position, "alias cycle detected", .{});
                             break;
                         }
-                        rhs = &symbol.type_decl.type;
+                        rhs = &symbol.data.type_decl.type;
                     },
                     else => break,
                 }
@@ -81,8 +81,8 @@ pub fn enterFunDecl(pr: *PostModuleScopeResolver, fun_decl: *node.FunDecl) void 
 
     var target_scope = pr.top();
     if (fun_decl.type_name) |*type_name| {
-        const result = common.resolve(pr.top(), type_name, common.defaultResolveLocal);
-        const type_scope = if (result) |symbol| switch (symbol) {
+        const result = common.resolve(pr.top(), type_name);
+        const type_scope = if (result) |symbol| switch (symbol.data) {
             .type_decl => |td| &td.scope,
             else => {
                 pr.raise(
@@ -108,7 +108,7 @@ pub fn enterFunDecl(pr: *PostModuleScopeResolver, fun_decl: *node.FunDecl) void 
 
     // TODO: restrict non-local Foo__bar if Foo::bar exists
     // TODO: restrict name of non-local function to not include ' (e.g. func')
-    if (target_scope.insert(pr.ctx().allocator, fun_decl)) |existing| {
+    if (target_scope.insert(pr.ctx().allocator, node.Symbol.fromSymbolLike(fun_decl))) |existing| {
         pr.raise(
             fun_decl.name.head.position,
             "{s} redeclared in this block; other declaration at {f}",
@@ -123,8 +123,8 @@ pub fn enterFunDecl(pr: *PostModuleScopeResolver, fun_decl: *node.FunDecl) void 
 pub fn enterDefDecl(pr: *PostModuleScopeResolver, def_decl: *node.DefDecl) void {
     var target_scope = pr.top();
     if (def_decl.type_name) |*type_name| {
-        const result = common.resolve(pr.top(), type_name, common.defaultResolveLocal);
-        const type_scope = if (result) |symbol| switch (symbol) {
+        const result = common.resolve(pr.top(), type_name);
+        const type_scope = if (result) |symbol| switch (symbol.data) {
             .type_decl => |td| &td.scope,
             else => {
                 pr.raise(
@@ -148,7 +148,7 @@ pub fn enterDefDecl(pr: *PostModuleScopeResolver, def_decl: *node.DefDecl) void 
         return;
     }
 
-    if (target_scope.insert(pr.ctx().allocator, def_decl)) |existing| {
+    if (target_scope.insert(pr.ctx().allocator, node.Symbol.fromSymbolLike(def_decl))) |existing| {
         pr.raise(
             def_decl.name.head.position,
             "{s} redeclared in this block; other declaration at {f}",
@@ -180,8 +180,10 @@ pub fn enterTupleType(pr: *PostModuleScopeResolver, tuple_type: *node.TupleType)
 pub fn exitTupleType(pr: *PostModuleScopeResolver, tuple_type: *node.TupleType) void {
     const scope = pr.top();
     for (tuple_type.types, 0..) |*ty, index| {
-        const indexName = common.indexName(&common.index_name_buf, index);
-        std.debug.assert(scope.insertName(pr.ctx().allocator, indexName, ty) == null);
+        std.debug.assert(scope.insert(pr.ctx().allocator, .{
+            .name = pr.ast.num(index),
+            .data = node.Symbol.Data.fromSymbolLike(ty),
+        }) == null);
     }
     pr.pop(&tuple_type.scope);
 }
@@ -202,8 +204,16 @@ pub fn exitCompStmt(pr: *PostModuleScopeResolver, comp_stmt: *node.CompStmt) voi
     pr.pop(&comp_stmt.scope);
 }
 
-pub fn enterEnumType(pr: *PostModuleScopeResolver, enum_type: *node.EnumType) void {
+pub fn enterEnumType(pr: *PostModuleScopeResolver, enum_type: *node.EnumType) Ast.ChildDisposition {
     pr.push(&enum_type.scope);
+    for (enum_type.alts) |*alt| {
+        pr.insert(node.Symbol{
+            .name = alt.name.text(),
+            .data = node.Symbol.Data.fromSymbolLike(alt),
+            .type_ctx = .{ .enum_type = enum_type },
+        });
+    }
+    return .skip; // no need to visit children as they are handled above
 }
 
 pub fn exitEnumType(pr: *PostModuleScopeResolver, enum_type: *node.EnumType) void {
@@ -231,17 +241,21 @@ pub fn enterExpr(_: *PostModuleScopeResolver, _: *node.Expr) Ast.ChildDispositio
 }
 
 pub fn enterScopedIdent(pr: *PostModuleScopeResolver, scoped_ident: *node.ScopedIdent) void {
-    if (common.resolveScoped(pr.top(), scoped_ident, common.defaultResolveLocal) == null) {
+    const res = common.resolveScoped(pr.top(), scoped_ident, .{});
+    if (res) |r| {
+        switch (r.data) {
+            .type_decl, .sub_type => {},
+            else => {
+                pr.raise(scoped_ident.head.position, "{f} is not a type", .{scoped_ident});
+            },
+        }
+    } else {
         pr.raise(scoped_ident.head.position, "undefined: {f}", .{scoped_ident});
     }
 }
 
 pub fn enterStructField(pr: *PostModuleScopeResolver, struct_field: *node.StructField) void {
     pr.insert(struct_field);
-}
-
-pub fn enterEnumerator(pr: *PostModuleScopeResolver, enumerator: *node.Enumerator) void {
-    pr.insert(enumerator);
 }
 
 fn push(pr: *PostModuleScopeResolver, ref: *node.Scope) void {
@@ -278,13 +292,18 @@ fn topLabelScope(pr: *PostModuleScopeResolver) *node.LabelScope {
     return pr.label_scopes.at(pr.label_scopes.len - 1).*;
 }
 
-fn insert(pr: *PostModuleScopeResolver, symbol: anytype) void {
+fn insert(pr: *PostModuleScopeResolver, symbol_: anytype) void {
+    const position = if (@TypeOf(symbol_) != node.Symbol)
+        symbol_.name.head.position
+    else symbol_.head().position;
+    const symbol = if (@TypeOf(symbol_) != node.Symbol) node.Symbol.fromSymbolLike(symbol_)
+        else symbol_;
     if (pr.top().insert(pr.ctx().allocator, symbol)) |existing| {
         pr.raise(
-            symbol.name.head.position,
+            position,
             "{s} redeclared in this block; other declaration at {f}",
             .{
-                symbol.name.text(),
+                symbol.name,
                 pr.code.target(existing.head().position),
             },
         );

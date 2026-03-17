@@ -3,6 +3,7 @@ const std = @import("std");
 const Token = @import("Lexer.zig").Token;
 const Code = @import("Code.zig");
 const common = @import("common.zig");
+const TypeRef = @import("type_ref.zig").TypeRef;
 
 // TODO:
 // pub const Module = struct {
@@ -35,6 +36,7 @@ pub const VarDecl = struct {
     declarator: Token = .{},
     name: Ident = .{},
     type: ?Type = null,
+    type_ref: TypeRef = .unset,
     init_expr: ?Expr = null,
 };
 
@@ -43,6 +45,7 @@ pub const DefDecl = struct {
     type_name: ?Ident = null,
     name: Ident = .{},
     type: ?Type = null,
+    type_ref: TypeRef = .unset,
     init_expr: Expr = .dirty,
 };
 
@@ -56,6 +59,7 @@ pub const FunDecl = struct {
     body: CompStmt = .{},
     scope: Scope = .{},
     label_scope: LabelScope = .{},
+    type_ref: TypeRef = .unset,
 };
 
 pub const FunParam = struct {
@@ -63,12 +67,16 @@ pub const FunParam = struct {
     name: Ident = .{},
     type: Type = .dirty,
     unwrap: bool = false,
+    type_ref: TypeRef = .unset,
 };
 
 pub const TypeDecl = struct {
     head: Head = .{},
     name: Ident = .{},
     type: Type = .dirty,
+    // NOTE: this represents the underlying type
+    // not the distinct type created by the declaration
+    type_ref: TypeRef = .unset,
     scope: Scope = .{},
 };
 
@@ -106,6 +114,7 @@ pub const TupleType = struct {
 pub const SubType = struct {
     head: Head = .{},
     type: Type = .dirty,
+    type_ref: TypeRef = .unset,
 };
 
 pub const SumType = struct {
@@ -226,6 +235,7 @@ pub const Assign = struct {
     head: Head = .{},
     lvalue: Expr = .dirty,
     rvalue: Expr = .dirty,
+    type_ref: TypeRef = .unset,
 };
 
 pub const IfStmt = struct {
@@ -260,6 +270,7 @@ pub const SumTypeReduce = struct {
     declarator: Token = .{},
     name: Ident = .{},
     reduction: Type = .dirty,
+    type_ref: TypeRef = .unset,
     value: Expr = .dirty,
 };
 
@@ -289,6 +300,7 @@ pub const CaseBinding = struct {
     declarator: Token = .{},
     name: Ident = .{},
     type: Type = .dirty,
+    type_ref: TypeRef = .unset,
 };
 
 pub const ReturnStmt = struct {
@@ -317,26 +329,48 @@ pub const Expr = union(enum) {
     // Atomic expressions
     anon_call: AnonCallExpr,
     token_expr: TokenExpr,
-    builtin_type: BuiltinType,
-    scoped_ident: ScopedIdent,
+    ref_expr: RefExpr,
     dirty,
+
+    pub fn head(expr: *Expr) *Head {
+        return switch (expr.*) {
+            .dirty => unreachable,
+            inline else => |*foo| &foo.head,
+        };
+    }
+
+    pub fn getType(expr: Expr) TypeRef {
+        return switch (expr) {
+            .dirty => .unset,
+            inline else => |foo| foo.type_ref,
+        };
+    }
+};
+
+pub const RefExpr = struct {
+    head: Head = .{},
+    name: ScopedIdent = .{},
+    type_ref: TypeRef = .unset,
 };
 
 pub const TokenExpr = struct {
     head: Head = .{},
     token: Token = .{},
+    type_ref: TypeRef = .unset,
 };
 
 pub const PostfixExpr = struct {
     head: Head = .{},
     op: Token,
     operand: *Expr,
+    type_ref: TypeRef = .unset,
 };
 
 pub const UnaryExpr = struct {
     head: Head = .{},
     op: Token,
     operand: *Expr,
+    type_ref: TypeRef = .unset,
 };
 
 pub const BinExpr = struct {
@@ -344,17 +378,20 @@ pub const BinExpr = struct {
     op: Token = .{},
     left: *Expr,
     right: *Expr,
+    type_ref: TypeRef = .unset,
 };
 
 pub const CallExpr = struct {
     head: Head = .{},
     callable: *Expr = undefined,
     args: []CallExprArg = &.{},
+    type_ref: TypeRef = .unset,
 };
 
 pub const AnonCallExpr = struct {
     head: Head = .{},
     args: []CallExprArg = &.{},
+    type_ref: TypeRef = .unset,
 };
 
 pub const CallExprArg = union(enum) {
@@ -373,6 +410,7 @@ pub const CollAccessExpr = struct {
     head: Head = .{},
     lvalue: *Expr,
     subscript: *CollSubscript,
+    type_ref: TypeRef = .unset,
 };
 
 pub const CollSubscript = union(enum) {
@@ -391,6 +429,7 @@ pub const FieldAccessExpr = struct {
     head: Head = .{},
     value: *Expr = undefined,
     field: Ident = .{},
+    type_ref: TypeRef = .unset,
 };
 
 pub const Flag = enum {
@@ -399,42 +438,64 @@ pub const Flag = enum {
     resolving,
 };
 
-pub const Symbol = union(enum) {
-    def_decl: *DefDecl,
-    var_decl: *VarDecl,
-    fun_decl: *FunDecl,
-    fun_param: *FunParam,
-    type_decl: *TypeDecl,
-    enumerator: *Enumerator,
-    sub_type: *SubType,
-    case_binding: *CaseBinding,
-    struct_field: *StructField,
-    sum_type_reduce: *SumTypeReduce,
+pub const Symbol = struct {
+    name: []const u8,
+    data: Data,
+    type_ctx: ?TypeCtx = null,
 
     pub fn head(sym: Symbol) *Head {
-        return switch (sym) {
+        return switch (sym.data) {
             inline else => |foo| &foo.head,
         };
     }
 
     pub fn fieldNameFromType(comptime T: type) ?[]const u8 {
-        inline for (std.meta.fields(Symbol)) |field| {
+        inline for (std.meta.fields(Data)) |field| {
             if (field.type == T) {
                 return field.name;
             }
         }
     }
 
+    pub fn fromSymbolLike(n: anytype) Symbol {
+        return .{
+            .name = n.name.text(),
+            .data = Symbol.Data.fromSymbolLike(n),
+        };
+    }
+
     pub fn format(
         s: Symbol,
         w: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        switch (s) {
+        switch (s.data) {
             inline else => |value| {
                 try w.print("{s}", .{common.unqualTypeName(@TypeOf(value.*))});
             },
         }
     }
+
+    pub const Data = union(enum) {
+        def_decl: *DefDecl,
+        var_decl: *VarDecl,
+        fun_decl: *FunDecl,
+        fun_param: *FunParam,
+        type_decl: *TypeDecl,
+        enumerator: *Enumerator,
+        sub_type: *SubType,
+        case_binding: *CaseBinding,
+        struct_field: *StructField,
+        sum_type_reduce: *SumTypeReduce,
+
+        pub fn fromSymbolLike(n: anytype) Data {
+            const field = comptime Symbol.fieldNameFromType(@TypeOf(n)).?;
+            return @unionInit(Data, field, n);
+        }
+    };
+
+    pub const TypeCtx = union(enum) {
+        enum_type: *EnumType,
+    };
 
     pub const dont_walk = true;
 };
@@ -443,21 +504,16 @@ pub const Scope = struct {
     parent: ?*Scope = null,
     entries: std.StringHashMapUnmanaged(Symbol) = .empty,
 
-    pub fn insertName(s: *Scope, allocator: std.mem.Allocator, name: []const u8, symbol: anytype) ?Symbol {
-        const field = comptime Symbol.fieldNameFromType(@TypeOf(symbol)).?;
-        const result = s.entries.getOrPut(allocator, name) catch @panic("OOM");
+    pub fn insert(s: *Scope, allocator: std.mem.Allocator, symbol: Symbol) ?Symbol {
+        const result = s.entries.getOrPut(allocator, symbol.name) catch @panic("OOM");
         if (result.found_existing) {
             return result.value_ptr.*;
         }
-        result.value_ptr.* = @unionInit(Symbol, field, symbol);
+        result.value_ptr.* = symbol;
         return null;
     }
 
-    pub fn insert(s: *Scope, allocator: std.mem.Allocator, symbol: anytype) ?Symbol {
-        return s.insertName(allocator, symbol.name.text(), symbol);
-    }
-
-    pub inline fn get(s: *Scope, name: []const u8) ?Symbol {
+    pub inline fn get(s: Scope, name: []const u8) ?Symbol {
         return s.entries.get(name);
     }
 

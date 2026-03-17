@@ -11,6 +11,7 @@ const assert = std.debug.assert;
 
 error_out: *Io.Writer,
 allocator: mem.Allocator,
+scratch: *heap.ArenaAllocator,
 
 const Self = @This();
 
@@ -23,6 +24,7 @@ pub const Default = struct {
 
     error_out: fs.File.Writer,
     debug_alloc: std.heap.DebugAllocator(.{}),
+    scratch: ?std.heap.ArenaAllocator = null,
 
     pub fn init() Default {
         return .{
@@ -32,6 +34,9 @@ pub const Default = struct {
     }
 
     pub fn deinit(dc: *Default) void {
+        if (dc.scratch != null) {
+            dc.scratch.?.deinit();
+        }
         if (dc.debug_alloc.deinit() == .leak) {
             assert(!dc.debug_alloc.detectLeaks());
         }
@@ -39,9 +44,13 @@ pub const Default = struct {
     }
 
     pub fn general(dc: *Default) Self {
+        if (dc.scratch == null) {
+            dc.scratch = heap.ArenaAllocator.init(dc.debug_alloc.allocator());
+        }
         return .{
             .error_out = &dc.error_out.interface,
             .allocator = dc.debug_alloc.allocator(),
+            .scratch = &dc.scratch.?,
         };
     }
 };
@@ -50,6 +59,7 @@ pub const Testing = struct {
     var writer_buf: [4096]u8 = undefined;
 
     error_out: fs.File.Writer,
+    scratch: ?std.heap.ArenaAllocator = null,
 
     pub fn init() Testing {
         return .{
@@ -62,9 +72,13 @@ pub const Testing = struct {
     }
 
     pub fn general(tc: *Testing) Self {
+        if (tc.scratch == null) {
+            tc.scratch = heap.ArenaAllocator.init(std.testing.allocator);
+        }
         return .{
             .error_out = &tc.error_out.interface,
             .allocator = std.testing.allocator,
+            .scratch = &tc.scratch.?,
         };
     }
 };

@@ -10,11 +10,12 @@ const Ast = @import("Ast.zig");
 const Parser = @import("Parser.zig");
 const node = @import("node.zig");
 const GeneralContext = @import("GeneralContext.zig");
+const ty = @import("type.zig");
 
 // Semantic passes
 const ModuleScopeResolver = @import("ModuleScopeResolver.zig");
 const PostModuleScopeResolver = @import("PostModuleScopeResolver.zig");
-const ImperativeScopeResolver = @import("ImperativeScopeResolver.zig");
+const TypeChecker = @import("TypeChecker.zig");
 // const ScopeBuilder = @import("ScopeBuilder.zig");
 // const IdentResolver = @import("IdentResolver.zig");
 
@@ -93,9 +94,12 @@ pub fn main() !void {
         return error.SemanticAnalysisFailed;
     }
 
-    var isr = ImperativeScopeResolver.init(&ast, &code);
-    Ast.walk(&isr, &ast.root.?);
-    isr.deinit();
+    var type_store = ty.Store.init(&ctx);
+    defer type_store.deinit();
+
+    var tc = TypeChecker.init(&ast, &code, &type_store);
+    Ast.walk(&tc, &ast.root.?);
+    tc.deinit();
 
     if (code.errors != 0) {
         std.debug.print("{f}", .{ast});

@@ -5,6 +5,8 @@ const node = @import("node.zig");
 const GeneralContext = @import("GeneralContext.zig");
 const Token = @import("Lexer.zig").Token;
 const common = @import("common.zig");
+const TypeRef = @import("type_ref.zig").TypeRef;
+
 const meta = std.meta;
 const mem = std.mem;
 
@@ -49,6 +51,11 @@ pub fn deinit(ast: *Ast) void {
     walk(&scope_cleaner, &ast.root.?);
 
     ast.arena.deinit();
+}
+
+pub fn num(ast: *Ast, index: usize) []const u8 {
+    const indexName = common.indexName(&common.index_name_buf, index);
+    return ast.arena.allocator().dupe(u8, indexName) catch @panic("OOM");
 }
 
 // Allocate value on the heap
@@ -350,6 +357,12 @@ pub const Dumper = struct {
         if (skip or getChild(data_ref) != null) {
             return false;
         }
+        // Ship .unset type references
+        if (T == TypeRef) {
+            if (data_ref.* == .unset) {
+                return false;
+            }
+        }
         switch (@typeInfo(T)) {
             .@"union", .@"struct" => if (meta.hasMethod(T, "format")) {
                 d.emitAuxData(name, "{f}", data_ref.*, count);
@@ -367,6 +380,10 @@ pub const Dumper = struct {
                 return true;
             },
             .@"enum" => {
+                if (meta.hasMethod(T, "format")) {
+                    d.emitAuxData(name, "{f}", data_ref.*, count);
+                    return true;
+                }
                 d.emitAuxData(name, "{t}", data_ref.*, count);
                 return true;
             },
